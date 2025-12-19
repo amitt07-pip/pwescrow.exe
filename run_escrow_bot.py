@@ -1,0 +1,72 @@
+"""
+Run PagaL Escrow Bot only
+"""
+import asyncio
+import sys
+import types
+import os
+
+if sys.version_info >= (3, 13):
+    sys.modules["imghdr"] = types.ModuleType("imghdr")
+
+def main():
+    escrow_token = os.getenv("ESCROW_BOT_TOKEN")
+    if not escrow_token:
+        print("❌ ERROR: ESCROW_BOT_TOKEN not set!")
+        sys.exit(1)
+    
+    print("✅ PagaL Escrow Bot (@PagaLEscrowBot) - Starting...")
+    
+    import escrow_bot
+    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ChatMemberHandler
+    
+    app = ApplicationBuilder().token(escrow_token).build()
+    
+    app.add_handler(CommandHandler("start", escrow_bot.start_command))
+    app.add_handler(CommandHandler("menu", escrow_bot.menu_command))
+    app.add_handler(CommandHandler("escrow", escrow_bot.escrow_command))
+    app.add_handler(CommandHandler("dispute", escrow_bot.dispute_command))
+    app.add_handler(CommandHandler("dd", escrow_bot.dd_command))
+    app.add_handler(CommandHandler("buyer", escrow_bot.buyer_command))
+    app.add_handler(CommandHandler("seller", escrow_bot.seller_command))
+    app.add_handler(CommandHandler("token", escrow_bot.token_command))
+    app.add_handler(CommandHandler("deposit", escrow_bot.deposit_command))
+    app.add_handler(CommandHandler("balance", escrow_bot.balance_command))
+    app.add_handler(CommandHandler("addbalance", escrow_bot.addbalance_command))
+    app.add_handler(CommandHandler("add", escrow_bot.add_command))
+    app.add_handler(CommandHandler("fakedepo", escrow_bot.fakedepo_command))
+    app.add_handler(CommandHandler("link", escrow_bot.link_command))
+    app.add_handler(CommandHandler("blacklist", escrow_bot.blacklist_command))
+    app.add_handler(CommandHandler("leave", escrow_bot.leave_command))
+    app.add_handler(CommandHandler("verify", escrow_bot.verify_command))
+    app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
+    app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
+    
+    async def post_init(application):
+        asyncio.create_task(escrow_bot.monitor_deposits(application))
+    
+    app.post_init = post_init
+    
+    print("✅ PagaL Escrow Bot is running...")
+    
+    # Print configuration diagnostics
+    bscscan_key = os.getenv("BSCSCAN_API_KEY", "")
+    trongrid_key = os.getenv("TRONGRID_API_KEY", "")
+    logs_channel_id = os.getenv("LOGS_CHANNEL_ID", "")
+    
+    if bscscan_key and trongrid_key:
+        print("✅ Blockchain monitoring enabled (BSC & TRON)")
+    else:
+        print("⚠️  Blockchain monitoring disabled (API keys not configured)")
+    
+    if logs_channel_id:
+        print(f"✅ Logs channel configured: {logs_channel_id}")
+    else:
+        print("⚠️  Logs channel not configured (LOGS_CHANNEL_ID not set)")
+    
+    print("✅ Bot is now polling for updates...")
+    
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
