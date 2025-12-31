@@ -608,9 +608,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Wait for bot admin permissions to propagate
             await asyncio.sleep(2)
             
-            # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await current_client.create_chat_invite_link(
-                chat_id=supergroup.id,
+            # Create invite link using Bot API (gives generic "You've been invited" preview)
+            invite_link_obj = await context.bot.create_chat_invite_link(
+                chat_id=bot_chat_id,
                 member_limit=2
             )
             invite_link = invite_link_obj.invite_link
@@ -755,9 +755,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Wait for bot admin permissions to propagate
             await asyncio.sleep(2)
             
-            # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await current_client.create_chat_invite_link(
-                chat_id=supergroup.id,
+            # Create invite link using Bot API (gives generic "You've been invited" preview)
+            invite_link_obj = await context.bot.create_chat_invite_link(
+                chat_id=bot_chat_id,
                 member_limit=2
             )
             invite_link = invite_link_obj.invite_link
