@@ -572,7 +572,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Small delay before promoting
             await asyncio.sleep(1)
             
-            # Promote bot to admin with full permissions
+            # Promote bot to admin with full permissions (anonymous to potentially get generic invite preview)
             await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=bot_username,
@@ -585,7 +585,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     can_change_info=True,
                     can_invite_users=True,
                     can_pin_messages=True,
-                    is_anonymous=False
+                    is_anonymous=True
                 )
             )
             
@@ -771,7 +771,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Small delay before promoting
             await asyncio.sleep(1)
             
-            # Promote bot to admin with full permissions
+            # Promote bot to admin with full permissions (anonymous to potentially get generic invite preview)
             await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=bot_username,
@@ -784,7 +784,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     can_change_info=True,
                     can_invite_users=True,
                     can_pin_messages=True,
-                    is_anonymous=False
+                    is_anonymous=True
                 )
             )
             
