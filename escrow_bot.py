@@ -98,6 +98,21 @@ release_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id':
 # Track refund confirmations (temporary storage for refund confirmation workflow)
 refund_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': ..., 'seller_id': ..., 'buyer_confirmed': False, 'seller_confirmed': False, 'token': ..., 'network': ..., 'seller_address': ...}}
 
+# Global blacklist - users who are completely blocked from using the bot
+blacklisted_users = set()  # {user_id, ...}
+
+async def check_blacklist(update: Update) -> bool:
+    """Check if any user in the chat is blacklisted. Returns True if blacklisted user found."""
+    user = update.effective_user
+    if user and user.id in blacklisted_users:
+        await update.message.reply_text(
+            f"<b>A blacklisted user found in the chat</b>\n\n"
+            f"<b>User:</b> <code>{user.id}</code>",
+            parse_mode='HTML'
+        )
+        return True
+    return False
+
 def generate_referral_code(user_id):
     """Generate a unique referral code for a user based on their ID"""
     hash_object = hashlib.sha256(str(user_id).encode())
@@ -193,6 +208,8 @@ def generate_group_photo(buyer_username, seller_username):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
+    if await check_blacklist(update):
+        return
     welcome_message = """💫 *@PagaLEscrowBot* 💫
 Your Trustworthy Telegram Escrow Service
 
@@ -226,6 +243,8 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /menu command"""
+    if await check_blacklist(update):
+        return
     welcome_message = """💫 *@PagaLEscrowBot* 💫
 Your Trustworthy Telegram Escrow Service
 
@@ -259,6 +278,8 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
 
 async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /escrow command - show escrow type selection"""
+    if await check_blacklist(update):
+        return
     keyboard = [
         [InlineKeyboardButton("P2P", callback_data="escrow_p2p"),
          InlineKeyboardButton("Product Deal", callback_data="escrow_product")]
@@ -269,6 +290,8 @@ async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /dispute command - notify admins"""
+    if await check_blacklist(update):
+        return
     chat = update.effective_chat
     
     # Only work in groups/supergroups
@@ -322,6 +345,8 @@ async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /dd command - deal details form"""
+    if await check_blacklist(update):
+        return
     chat = update.effective_chat
     chat_id = chat.id
     
@@ -1989,6 +2014,8 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
 
 async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /buyer command with crypto address"""
+    if await check_blacklist(update):
+        return
     user = update.effective_user
     chat_id = update.effective_chat.id
     
@@ -2128,6 +2155,8 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /seller command with crypto address"""
+    if await check_blacklist(update):
+        return
     user = update.effective_user
     chat_id = update.effective_chat.id
     
@@ -2267,6 +2296,8 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /token command to choose cryptocurrency"""
+    if await check_blacklist(update):
+        return
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     
@@ -2309,6 +2340,8 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /deposit command to generate deposit address"""
+    if await check_blacklist(update):
+        return
     chat_id = update.effective_chat.id
     
     # Check if escrow data exists
@@ -2525,6 +2558,8 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command to show current escrow balance"""
+    if await check_blacklist(update):
+        return
     chat_id = update.effective_chat.id
     
     # Check if escrow data exists
@@ -3139,6 +3174,108 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
+async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /blacklist command - admin only, globally blacklist a user from using the bot"""
+    user = update.effective_user
+    
+    # Check if user is an admin
+    if user.id not in ADMIN_IDS:
+        await update.message.reply_text(
+            "<b>⚠️ This command is only available for admins.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    target_user_id = None
+    target_display_name = None
+    
+    # Check if a username was provided as argument (e.g., /blacklist @username)
+    if context.args and len(context.args) > 0:
+        username = context.args[0].strip()
+        # Remove @ prefix if present
+        if username.startswith('@'):
+            username = username[1:]
+        
+        # Try to find the user - check if it's a numeric user ID
+        if username.isdigit():
+            target_user_id = int(username)
+            target_display_name = f"<code>{target_user_id}</code>"
+        else:
+            # Try to get user from chat administrators if in a group
+            chat = update.effective_chat
+            if chat.type in ['group', 'supergroup']:
+                try:
+                    admins = await context.bot.get_chat_administrators(chat_id=chat.id)
+                    found = False
+                    for admin in admins:
+                        if admin.user.username and admin.user.username.lower() == username.lower():
+                            target_user_id = admin.user.id
+                            target_display_name = f"@{admin.user.username}"
+                            found = True
+                            break
+                    
+                    if not found:
+                        await update.message.reply_text(
+                            f"<b>❌ Could not find user @{username}.</b>\n\n"
+                            "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> or use their numeric user ID.",
+                            parse_mode='HTML'
+                        )
+                        return
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"<b>❌ Failed to lookup user @{username}: {str(e)}</b>\n\n"
+                        "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> or use their numeric user ID.",
+                        parse_mode='HTML'
+                    )
+                    return
+            else:
+                await update.message.reply_text(
+                    f"<b>❌ Cannot lookup username in DMs.</b>\n\n"
+                    "<b>Tip:</b> Use the numeric user ID instead: <code>/blacklist 123456789</code>",
+                    parse_mode='HTML'
+                )
+                return
+    # Check if this is a reply to another message
+    elif update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_display_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+    else:
+        await update.message.reply_text(
+            "<b>⚠️ Usage:</b>\n"
+            "• Reply to a message: <code>/blacklist</code>\n"
+            "• By username: <code>/blacklist @username</code>\n"
+            "• By user ID: <code>/blacklist 123456789</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Don't blacklist other admins
+    if target_user_id in ADMIN_IDS:
+        await update.message.reply_text(
+            "<b>⚠️ Cannot blacklist other admins.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if already blacklisted
+    if target_user_id in blacklisted_users:
+        await update.message.reply_text(
+            f"<b>⚠️ User {target_display_name} is already blacklisted.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Add to blacklist
+    blacklisted_users.add(target_user_id)
+    
+    await update.message.reply_text(
+        f"<b>✅ User {target_display_name} has been globally blacklisted from the bot.</b>\n\n"
+        f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+        "<b>Note:</b> This user can no longer use any bot functions.",
+        parse_mode='HTML'
+    )
+
 async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /leave command - admin only, transfer ownership to admin and leave group"""
     user = update.effective_user
@@ -3195,6 +3332,8 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /release command - only seller in P2P or buyer in OTC can release funds"""
+    if await check_blacklist(update):
+        return
     user = update.effective_user
     chat = update.effective_chat
     
@@ -3389,6 +3528,8 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /refund command - refund funds to seller (mirrors release but to seller)"""
+    if await check_blacklist(update):
+        return
     user = update.effective_user
     chat = update.effective_chat
     
@@ -3694,6 +3835,7 @@ def main():
     app.add_handler(CommandHandler("fakedepo", fakedepo_command))
     app.add_handler(CommandHandler("link", link_command))
     app.add_handler(CommandHandler("ban", ban_command))
+    app.add_handler(CommandHandler("blacklist", blacklist_command))
     app.add_handler(CommandHandler("verify", verify_command))
     app.add_handler(CommandHandler("release", release_command))
     app.add_handler(CommandHandler("refund", refund_command))
