@@ -630,62 +630,22 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Small delay for promotion to take effect
             await asyncio.sleep(1)
             
-            # Poll Bot API until it recognizes the chat (up to 30 seconds)
-            bot_chat_id = None
-            bot_user = await context.bot.get_me()
-            print(f"🔍 P2P Waiting for Bot API to recognize chat...")
-            for poll_attempt in range(15):  # 15 attempts * 2 seconds = 30 seconds max
-                for cid in candidate_ids:
-                    try:
-                        # Try to get the bot's membership status in the chat
-                        member = await context.bot.get_chat_member(cid, bot_user.id)
-                        if member.status in ['administrator', 'creator', 'member']:
-                            bot_chat_id = cid
-                            print(f"✅ P2P Bot API recognizes chat_id: {bot_chat_id} (status: {member.status}) after {poll_attempt + 1} attempts")
-                            break
-                    except Exception as e:
-                        pass  # Chat not visible yet, continue polling
-                if bot_chat_id:
-                    break
-                print(f"⏳ P2P Poll attempt {poll_attempt + 1}/15 - Bot API doesn't see chat yet...")
-                await asyncio.sleep(2)
-            
-            if not bot_chat_id:
-                # Default to first candidate if none worked after polling
-                bot_chat_id = candidate_ids[0]
-                print(f"⚠️ P2P Bot API never recognized chat, using default: {bot_chat_id}")
-            
             # Store the transaction ID for this chat
-            if bot_chat_id not in escrow_roles:
-                escrow_roles[bot_chat_id] = {}
-            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            if supergroup.id not in escrow_roles:
+                escrow_roles[supergroup.id] = {}
+            escrow_roles[supergroup.id]['transaction_id'] = random_number
             
-            # Create invite link with member_limit=2
-            invite_link = None
-            # Try Bot API create_chat_invite_link with member_limit
-            if bot_chat_id:
-                try:
-                    invite_link_obj = await context.bot.create_chat_invite_link(
-                        chat_id=bot_chat_id,
-                        member_limit=2
-                    )
-                    invite_link = invite_link_obj.invite_link
-                    print(f"✅ P2P Invite link created via Bot API (with limit): {invite_link}")
-                except Exception as bot_err:
-                    print(f"⚠️ P2P Bot API create invite link failed: {bot_err}")
-            
-            # Fallback to Pyrogram if Bot API failed
-            if not invite_link:
-                try:
-                    invite_link_obj = await current_client.create_chat_invite_link(
-                        chat_id=supergroup.id,
-                        member_limit=2
-                    )
-                    invite_link = invite_link_obj.invite_link
-                    print(f"✅ P2P Invite link created via Pyrogram (fallback): {invite_link}")
-                except Exception as pyro_err:
-                    print(f"❌ P2P Pyrogram invite link also failed: {pyro_err}")
-                    raise Exception("Failed to create invite link")
+            # Create invite link with member_limit=2 using Pyrogram
+            try:
+                invite_link_obj = await current_client.create_chat_invite_link(
+                    chat_id=supergroup.id,
+                    member_limit=2
+                )
+                invite_link = invite_link_obj.invite_link
+                print(f"✅ P2P Invite link created via Pyrogram: {invite_link}")
+            except Exception as pyro_err:
+                print(f"❌ P2P Pyrogram invite link failed: {pyro_err}")
+                raise Exception("Failed to create invite link")
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -823,62 +783,22 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Small delay for promotion to take effect
             await asyncio.sleep(1)
             
-            # Poll Bot API until it recognizes the chat (up to 30 seconds)
-            bot_chat_id = None
-            bot_user = await context.bot.get_me()
-            print(f"🔍 OTC Waiting for Bot API to recognize chat...")
-            for poll_attempt in range(15):  # 15 attempts * 2 seconds = 30 seconds max
-                for cid in candidate_ids:
-                    try:
-                        # Try to get the bot's membership status in the chat
-                        member = await context.bot.get_chat_member(cid, bot_user.id)
-                        if member.status in ['administrator', 'creator', 'member']:
-                            bot_chat_id = cid
-                            print(f"✅ OTC Bot API recognizes chat_id: {bot_chat_id} (status: {member.status}) after {poll_attempt + 1} attempts")
-                            break
-                    except Exception as e:
-                        pass  # Chat not visible yet, continue polling
-                if bot_chat_id:
-                    break
-                print(f"⏳ OTC Poll attempt {poll_attempt + 1}/15 - Bot API doesn't see chat yet...")
-                await asyncio.sleep(2)
-            
-            if not bot_chat_id:
-                # Default to first candidate if none worked after polling
-                bot_chat_id = candidate_ids[0]
-                print(f"⚠️ OTC Bot API never recognized chat, using default: {bot_chat_id}")
-            
             # Store the transaction ID for this chat
-            if bot_chat_id not in escrow_roles:
-                escrow_roles[bot_chat_id] = {}
-            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            if supergroup.id not in escrow_roles:
+                escrow_roles[supergroup.id] = {}
+            escrow_roles[supergroup.id]['transaction_id'] = random_number
             
-            # Create invite link with member_limit=2
-            invite_link = None
-            # Try Bot API create_chat_invite_link with member_limit
-            if bot_chat_id:
-                try:
-                    invite_link_obj = await context.bot.create_chat_invite_link(
-                        chat_id=bot_chat_id,
-                        member_limit=2
-                    )
-                    invite_link = invite_link_obj.invite_link
-                    print(f"✅ OTC Invite link created via Bot API (with limit): {invite_link}")
-                except Exception as bot_err:
-                    print(f"⚠️ OTC Bot API create invite link failed: {bot_err}")
-            
-            # Fallback to Pyrogram if Bot API failed
-            if not invite_link:
-                try:
-                    invite_link_obj = await current_client.create_chat_invite_link(
-                        chat_id=supergroup.id,
-                        member_limit=2
-                    )
-                    invite_link = invite_link_obj.invite_link
-                    print(f"✅ OTC Invite link created via Pyrogram (fallback): {invite_link}")
-                except Exception as pyro_err:
-                    print(f"❌ OTC Pyrogram invite link also failed: {pyro_err}")
-                    raise Exception("Failed to create invite link")
+            # Create invite link with member_limit=2 using Pyrogram
+            try:
+                invite_link_obj = await current_client.create_chat_invite_link(
+                    chat_id=supergroup.id,
+                    member_limit=2
+                )
+                invite_link = invite_link_obj.invite_link
+                print(f"✅ OTC Invite link created via Pyrogram: {invite_link}")
+            except Exception as pyro_err:
+                print(f"❌ OTC Pyrogram invite link failed: {pyro_err}")
+                raise Exception("Failed to create invite link")
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
