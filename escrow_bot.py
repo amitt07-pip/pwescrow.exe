@@ -61,6 +61,12 @@ monitored_addresses = {}  # {address: {'chat_id': ..., 'network': ..., 'last_che
 # Track fakedepo pending selections (temporary storage for admin command)
 fakedepo_pending = {}  # {admin_user_id: target_chat_id}
 
+# Track release confirmations (temporary storage for confirmation workflow)
+release_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': ..., 'seller_id': ..., 'buyer_confirmed': False, 'seller_confirmed': False, 'token': ..., 'network': ...}}
+
+# Track refund confirmations (temporary storage for refund confirmation workflow)
+refund_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': ..., 'seller_id': ..., 'buyer_confirmed': False, 'seller_confirmed': False, 'token': ..., 'network': ..., 'seller_address': ...}}
+
 def generate_referral_code(user_id):
     """Generate a unique referral code for a user based on their ID"""
     hash_object = hashlib.sha256(str(user_id).encode())
@@ -1250,6 +1256,541 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             parse_mode='HTML',
             reply_markup=reply_markup
         )
+    
+    elif query.data.startswith("release_buyer_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in release_pending:
+            release_data = release_pending[message_id]
+            
+            if query.from_user.id == release_data['buyer_id']:
+                release_data['buyer_confirmed'] = True
+                
+                buyer_status = "✅" if release_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if release_data['seller_confirmed'] else "❌"
+                
+                if release_data['buyer_confirmed'] and release_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"release_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"release_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"release_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = release_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if release_data['seller_confirmed'] and "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if not release_data['seller_confirmed']:
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    status_msg = f"<b><u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Release withdrawl, waiting for <u>Seller</u>[<u>@{seller_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=status_msg, parse_mode='HTML')
+                elif release_data['seller_confirmed']:
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Release withdrawl.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[release_data['chat_id']].get('balance', 0)
+                    release_progress_msg = f"<b>Release of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=release_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = release_data.get('buyer_has_bio', False) and release_data.get('seller_has_bio', False)
+                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[release_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[release_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been released to the <u>Buyer</u>'s address! 🚀
+
+Approved By: @{buyer_name} | [{release_data['buyer_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    buyer_address = release_data.get('buyer_address', '')
+                    if buyer_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{buyer_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{buyer_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            reply_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            reply_markup = None
+                    else:
+                        reply_markup = None
+                    
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=reply_markup)
+                    
+                    if LOGS_CHANNEL_ID:
+                        try:
+                            chat_info = await context.bot.get_chat(release_data['chat_id'])
+                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
+                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
+
+👤 <b>Buyer:</b> {release_data['buyer_username']}
+👤 <b>Seller:</b> {release_data['seller_username']}
+📋 <b>Group Type:</b> {group_type}
+💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
+🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
+                        except Exception as e:
+                            print(f"Error sending logs message: {e}")
+                    
+                    try:
+                        release_amt = float(amount) if amount.lower() != 'all' else escrow_balance
+                        current_balance = escrow_roles[release_data['chat_id']].get('balance', 0)
+                        new_balance = max(0, current_balance - release_amt)
+                        escrow_roles[release_data['chat_id']]['balance'] = new_balance
+                        
+                        if new_balance <= 0:
+                            escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                    except:
+                        escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                    
+                    del release_pending[message_id]
+                
+                await query.answer("✅ Buyer confirmed! Waiting for seller confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the buyer can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("release_seller_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in release_pending:
+            release_data = release_pending[message_id]
+            
+            if query.from_user.id == release_data['seller_id']:
+                release_data['seller_confirmed'] = True
+                
+                buyer_status = "✅" if release_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if release_data['seller_confirmed'] else "❌"
+                
+                if release_data['buyer_confirmed'] and release_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"release_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"release_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"release_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = release_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if release_data['buyer_confirmed'] and "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if release_data['buyer_confirmed'] and release_data['seller_confirmed']:
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Release withdrawl.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[release_data['chat_id']].get('balance', 0)
+                    release_progress_msg = f"<b>Release of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=release_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = release_data.get('buyer_has_bio', False) and release_data.get('seller_has_bio', False)
+                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[release_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[release_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been released to the <u>Buyer</u>'s address! 🚀
+
+Approved By: @{buyer_name} | [{release_data['buyer_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    buyer_address = release_data.get('buyer_address', '')
+                    if buyer_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{buyer_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{buyer_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            reply_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            reply_markup = None
+                    else:
+                        reply_markup = None
+                    
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=reply_markup)
+                    
+                    if LOGS_CHANNEL_ID:
+                        try:
+                            chat_info = await context.bot.get_chat(release_data['chat_id'])
+                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
+                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
+
+👤 <b>Buyer:</b> {release_data['buyer_username']}
+👤 <b>Seller:</b> {release_data['seller_username']}
+📋 <b>Group Type:</b> {group_type}
+💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
+🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
+                        except Exception as e:
+                            print(f"Error sending logs message: {e}")
+                    
+                    escrow_roles[release_data['chat_id']]['balance'] -= escrow_balance
+                    
+                    if escrow_roles[release_data['chat_id']]['balance'] <= 0:
+                        escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                    
+                    del release_pending[message_id]
+                else:
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    status_msg = f"<b><u>Seller</u>[<u>@{seller_name}</u>] have confirmed the Release withdrawl, waiting for <u>Buyer</u>[<u>@{buyer_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=status_msg, parse_mode='HTML')
+                
+                await query.answer("✅ Seller confirmed! Waiting for buyer confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the seller can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("release_reject_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[2])
+        amount = "_".join(parts[3:])
+        
+        message_id = query.message.message_id
+        if message_id in release_pending:
+            release_data = release_pending[message_id]
+            
+            if query.from_user.id in [release_data['buyer_id'], release_data['seller_id']]:
+                await query.edit_message_text(
+                    text="<b>❌ Release confirmation rejected. Transaction cancelled.</b>",
+                    parse_mode='HTML'
+                )
+                await query.answer("❌ Release cancelled!", show_alert=False)
+                del release_pending[message_id]
+            else:
+                await query.answer("❌ Only buyer or seller can reject!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("refund_buyer_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in refund_pending:
+            refund_data = refund_pending[message_id]
+            
+            if query.from_user.id == refund_data['buyer_id']:
+                refund_data['buyer_confirmed'] = True
+                
+                buyer_status = "✅" if refund_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if refund_data['seller_confirmed'] else "❌"
+                
+                if refund_data['buyer_confirmed'] and refund_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"refund_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"refund_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"refund_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = refund_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if refund_data['seller_confirmed'] and "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if not refund_data['seller_confirmed']:
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    status_msg = f"<b><u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Refund, waiting for <u>Seller</u>[<u>@{seller_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=status_msg, parse_mode='HTML')
+                elif refund_data['seller_confirmed']:
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Refund.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[refund_data['chat_id']].get('balance', 0)
+                    refund_progress_msg = f"<b>Refund of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=refund_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = refund_data.get('buyer_has_bio', False) and refund_data.get('seller_has_bio', False)
+                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[refund_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[refund_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been refunded to the <u>Seller</u>'s address! 🚀
+
+Approved By: @{seller_name} | [{refund_data['seller_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    seller_address = refund_data.get('seller_address', '')
+                    if seller_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{seller_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{seller_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            reply_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            reply_markup = None
+                    else:
+                        reply_markup = None
+                    
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=reply_markup)
+                    
+                    if LOGS_CHANNEL_ID:
+                        try:
+                            chat_info = await context.bot.get_chat(refund_data['chat_id'])
+                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
+                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
+
+👤 <b>Buyer:</b> {refund_data['buyer_username']}
+👤 <b>Seller:</b> {refund_data['seller_username']}
+📋 <b>Group Type:</b> {group_type}
+💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
+🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
+                        except Exception as e:
+                            print(f"Error sending logs message: {e}")
+                    
+                    escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                    
+                    del refund_pending[message_id]
+                
+                await query.answer("✅ Buyer confirmed! Waiting for seller confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the buyer can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("refund_seller_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in refund_pending:
+            refund_data = refund_pending[message_id]
+            
+            if query.from_user.id == refund_data['seller_id']:
+                refund_data['seller_confirmed'] = True
+                
+                buyer_status = "✅" if refund_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if refund_data['seller_confirmed'] else "❌"
+                
+                if refund_data['buyer_confirmed'] and refund_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"refund_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"refund_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"refund_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = refund_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if refund_data['buyer_confirmed'] and "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if refund_data['buyer_confirmed'] and refund_data['seller_confirmed']:
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Refund.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[refund_data['chat_id']].get('balance', 0)
+                    refund_progress_msg = f"<b>Refund of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=refund_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = refund_data.get('buyer_has_bio', False) and refund_data.get('seller_has_bio', False)
+                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[refund_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[refund_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been refunded to the <u>Seller</u>'s address! 🚀
+
+Approved By: @{seller_name} | [{refund_data['seller_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    seller_address = refund_data.get('seller_address', '')
+                    if seller_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{seller_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{seller_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            reply_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            reply_markup = None
+                    else:
+                        reply_markup = None
+                    
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=reply_markup)
+                    
+                    if LOGS_CHANNEL_ID:
+                        try:
+                            chat_info = await context.bot.get_chat(refund_data['chat_id'])
+                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
+                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
+
+👤 <b>Buyer:</b> {refund_data['buyer_username']}
+👤 <b>Seller:</b> {refund_data['seller_username']}
+📋 <b>Group Type:</b> {group_type}
+💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
+🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
+                        except Exception as e:
+                            print(f"Error sending logs message: {e}")
+                    
+                    try:
+                        refund_amt = float(amount) if amount.lower() != 'all' else escrow_balance
+                        current_balance = escrow_roles[refund_data['chat_id']].get('balance', 0)
+                        new_balance = max(0, current_balance - refund_amt)
+                        escrow_roles[refund_data['chat_id']]['balance'] = new_balance
+                        
+                        if new_balance <= 0:
+                            escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                    except:
+                        escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                    
+                    del refund_pending[message_id]
+                else:
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    status_msg = f"<b><u>Seller</u>[<u>@{seller_name}</u>] have confirmed the Refund, waiting for <u>Buyer</u>[<u>@{buyer_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=status_msg, parse_mode='HTML')
+                
+                await query.answer("✅ Seller confirmed! Waiting for buyer confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the seller can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("refund_reject_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[2])
+        amount = "_".join(parts[3:])
+        
+        message_id = query.message.message_id
+        if message_id in refund_pending:
+            refund_data = refund_pending[message_id]
+            
+            if query.from_user.id in [refund_data['buyer_id'], refund_data['seller_id']]:
+                await query.edit_message_text(
+                    text="<b>❌ Refund confirmation rejected. Transaction cancelled.</b>",
+                    parse_mode='HTML'
+                )
+                await query.answer("❌ Refund cancelled!", show_alert=False)
+                del refund_pending[message_id]
+            else:
+                await query.answer("❌ Only buyer or seller can reject!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
     
     elif query.data == "back_to_start":
         welcome_message = """💫 @PagaLEscrowBot 💫
@@ -2502,6 +3043,14 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Check if deal is already complete
+    if chat.id in escrow_roles and escrow_roles[chat.id].get('deal_complete', False):
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
     # Check if escrow roles are set for this chat
     if chat.id not in escrow_roles:
         await update.message.reply_text(
@@ -2552,16 +3101,131 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # TODO: Implement actual fund release logic here
+    # Get amount
     amount = context.args[0]
-    await update.message.reply_text(
-        f"<b>✅ Release command received for amount: {amount}</b>\n\n"
-        "<b>Note:</b> Fund release functionality will be implemented soon.",
-        parse_mode='HTML'
+    
+    # Get token and network info
+    token_info = escrow_roles[chat.id].get('token', 'USDT')
+    # Handle both dict and string formats for token_info
+    if isinstance(token_info, dict):
+        token_name = token_info.get('name', 'USDT')
+        network_name = token_info.get('network', 'BSC')
+    else:
+        token_name = token_info
+        network_name = escrow_roles[chat.id].get('network', 'BSC')
+    
+    # Get buyer username
+    buyer_username = buyer_info.get('username', 'Unknown')
+    buyer_address = buyer_info.get('address', 'N/A')
+    
+    # Get escrow balance for "all" calculation
+    escrow_address = escrow_roles[chat.id].get('escrow_address', '')
+    monitored_balance = 0
+    manual_balance = 0
+    
+    if escrow_address and escrow_address.lower() in monitored_addresses:
+        monitored_balance = monitored_addresses[escrow_address.lower()].get('total_balance', 0)
+    
+    if chat.id in escrow_roles:
+        manual_balance = escrow_roles[chat.id].get('balance', 0)
+    
+    current_escrow_balance = monitored_balance + manual_balance
+    
+    # Calculate fees (1% escrow fee)
+    try:
+        if amount.lower() == 'all':
+            release_amount = current_escrow_balance
+            amount_for_calc = current_escrow_balance
+        else:
+            release_amount = amount
+            amount_for_calc = float(amount)
+    except:
+        release_amount = amount
+        amount_for_calc = 0
+    
+    # Format amounts with $ symbol and proper decimals
+    if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
+        network_fee = 0.10  # Fixed network fee
+        escrow_fee = amount_for_calc * 0.01  # 1% escrow fee
+        ambassador_discount = 0.0  # Always 0
+        ticket_discount = 0.0
+        formatted_amount = f"{amount_for_calc:.5f}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = f"{escrow_fee:.5f}"
+        formatted_ambassador = "0.00"
+        formatted_ticket = f"{ticket_discount:.5f}"
+    else:
+        formatted_amount = f"{release_amount}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = "0.15000"
+        formatted_ambassador = "0.00"
+        formatted_ticket = "0.00000"
+    
+    # Create confirmation message
+    # Strip @ from buyer_username if it exists
+    buyer_name_clean = buyer_username.lstrip('@') if buyer_username.startswith('@') else buyer_username
+    confirmation_message = f"""‼️<b>Release Confirmation</b>‼️
+
+🔒 <b>Paying To: Buyer[<u>@{buyer_name_clean}</u>]</b>
+💰 <b>Amount:</b> {formatted_amount} ({formatted_amount}$)
+🌐 <b>Network Fee:</b> {formatted_network_fee} ({formatted_network_fee}$)
+💷 <b>Escrow Fee:</b> {formatted_escrow_fee} ({formatted_escrow_fee}$)
+🤝 <b>Ambassador Discounts:</b> {formatted_ambassador} ({formatted_ambassador}$)
+🎫 <b>Ticket Discount:</b> {formatted_ticket} ({formatted_ticket}$)
+
+📬 <b>Address:</b> <code>{buyer_address}</code>
+🪙 <b>Token:</b> {token_name}
+🌐 <b>Network:</b> {network_name}
+
+<u><b>(Network fee will be deducted from amount)</b></u>
+<u><b>(Escrow fee will be deducted from total balance)</b></u>
+
+<b>Are you ready to proceed with this withdrawal?</b>
+<b>Both the parties kindly confirm the same and note the action is irreversible.</b>
+
+<b>For help: Hit /dispute to call an Administrator.</b>
+
+
+"""
+    
+    # Create confirmation buttons - stacked vertically
+    keyboard = [
+        [InlineKeyboardButton("Buyer Confirmation ❌", callback_data=f"release_buyer_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Seller Confirmation ❌", callback_data=f"release_seller_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Reject ❌", callback_data=f"release_reject_{chat.id}_{amount}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Send confirmation message
+    msg = await update.message.reply_text(
+        confirmation_message,
+        parse_mode='HTML',
+        reply_markup=reply_markup
     )
+    
+    # Get seller username
+    seller_username = seller_info.get('username', 'Unknown')
+    
+    # Store release confirmation state
+    release_pending[msg.message_id] = {
+        'chat_id': chat.id,
+        'amount': amount,
+        'buyer_id': buyer_info['user_id'],
+        'seller_id': seller_info['user_id'],
+        'buyer_confirmed': False,
+        'seller_confirmed': False,
+        'token': token_name,
+        'network': network_name,
+        'buyer_username': buyer_username,
+        'seller_username': seller_username,
+        'buyer_address': buyer_address,
+        'buyer_has_bio': buyer_info.get('has_bot_in_bio', False),
+        'seller_has_bio': seller_info.get('has_bot_in_bio', False),
+        'original_message': confirmation_message
+    }
 
 async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /refund command - only buyer in P2P or seller in OTC can refund funds"""
+    """Handle /refund command - refund funds to seller (mirrors release but to seller)"""
     user = update.effective_user
     chat = update.effective_chat
     
@@ -2569,6 +3233,14 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type not in ['group', 'supergroup']:
         await update.message.reply_text(
             "<b>⚠️ This command can only be used in escrow groups.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if deal is already complete
+    if chat.id in escrow_roles and escrow_roles[chat.id].get('deal_complete', False):
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
             parse_mode='HTML'
         )
         return
@@ -2623,13 +3295,124 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # TODO: Implement actual fund refund logic here
+    # Get amount
     amount = context.args[0]
-    await update.message.reply_text(
-        f"<b>✅ Refund command received for amount: {amount}</b>\n\n"
-        "<b>Note:</b> Fund refund functionality will be implemented soon.",
-        parse_mode='HTML'
+    
+    # Get token and network info
+    token_info = escrow_roles[chat.id].get('token', 'USDT')
+    if isinstance(token_info, dict):
+        token_name = token_info.get('name', 'USDT')
+        network_name = token_info.get('network', 'BSC')
+    else:
+        token_name = token_info
+        network_name = escrow_roles[chat.id].get('network', 'BSC')
+    
+    # Get seller username and address (paying to seller)
+    seller_username = seller_info.get('username', 'Unknown')
+    seller_address = seller_info.get('address', 'N/A')
+    buyer_username = buyer_info.get('username', 'Unknown')
+    
+    # Get escrow balance
+    escrow_address = escrow_roles[chat.id].get('escrow_address', '')
+    monitored_balance = 0
+    manual_balance = 0
+    
+    if escrow_address and escrow_address.lower() in monitored_addresses:
+        monitored_balance = monitored_addresses[escrow_address.lower()].get('total_balance', 0)
+    
+    if chat.id in escrow_roles:
+        manual_balance = escrow_roles[chat.id].get('balance', 0)
+    
+    current_escrow_balance = monitored_balance + manual_balance
+    
+    # Calculate amounts
+    try:
+        if amount.lower() == 'all':
+            refund_amount = current_escrow_balance
+            amount_for_calc = current_escrow_balance
+        else:
+            refund_amount = amount
+            amount_for_calc = float(amount)
+    except:
+        refund_amount = amount
+        amount_for_calc = 0
+    
+    # Format amounts
+    if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
+        network_fee = 0.10
+        escrow_fee = amount_for_calc * 0.01
+        ambassador_discount = 0.0
+        ticket_discount = 0.0
+        formatted_amount = f"{amount_for_calc:.5f}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = f"{escrow_fee:.5f}"
+        formatted_ambassador = "0.00"
+        formatted_ticket = f"{ticket_discount:.5f}"
+    else:
+        formatted_amount = f"{refund_amount}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = "0.15000"
+        formatted_ambassador = "0.00"
+        formatted_ticket = "0.00000"
+    
+    # Create refund confirmation message (paying to seller)
+    seller_name_clean = seller_username.lstrip('@') if seller_username.startswith('@') else seller_username
+    refund_message = f"""‼️<b>Refund Confirmation</b>‼️
+
+🔒 <b>Paying To: Seller[<u>@{seller_name_clean}</u>]</b>
+💰 <b>Amount:</b> {formatted_amount} ({formatted_amount}$)
+🌐 <b>Network Fee:</b> {formatted_network_fee} ({formatted_network_fee}$)
+💷 <b>Escrow Fee:</b> {formatted_escrow_fee} ({formatted_escrow_fee}$)
+🤝 <b>Ambassador Discounts:</b> {formatted_ambassador} ({formatted_ambassador}$)
+🎫 <b>Ticket Discount:</b> {formatted_ticket} ({formatted_ticket}$)
+
+📬 <b>Address:</b> <code>{seller_address}</code>
+🪙 <b>Token:</b> {token_name}
+🌐 <b>Network:</b> {network_name}
+
+<u><b>(Network fee will be deducted from amount)</b></u>
+<u><b>(Escrow fee will be deducted from total balance)</b></u>
+
+<b>Are you ready to proceed with this refund?</b>
+<b>Both the parties kindly confirm the same and note the action is irreversible.</b>
+
+<b>For help: Hit /dispute to call an Administrator.</b>
+
+
+"""
+    
+    # Create confirmation buttons
+    keyboard = [
+        [InlineKeyboardButton("Buyer Confirmation ❌", callback_data=f"refund_buyer_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Seller Confirmation ❌", callback_data=f"refund_seller_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Reject ❌", callback_data=f"refund_reject_{chat.id}_{amount}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Send confirmation message
+    msg = await update.message.reply_text(
+        refund_message,
+        parse_mode='HTML',
+        reply_markup=reply_markup
     )
+    
+    # Store refund confirmation state
+    refund_pending[msg.message_id] = {
+        'chat_id': chat.id,
+        'amount': amount,
+        'buyer_id': buyer_info['user_id'],
+        'seller_id': seller_info['user_id'],
+        'buyer_confirmed': False,
+        'seller_confirmed': False,
+        'token': token_name,
+        'network': network_name,
+        'buyer_username': buyer_username,
+        'seller_username': seller_username,
+        'seller_address': seller_address,
+        'buyer_has_bio': buyer_info.get('has_bot_in_bio', False),
+        'seller_has_bio': seller_info.get('has_bot_in_bio', False),
+        'original_message': refund_message
+    }
 
 async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /verify command to check if an address belongs to the bot"""
