@@ -635,19 +635,25 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
             
-            # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
+            # Create invite link - try export_chat_invite_link first (primary link, may give generic preview)
             invite_link = None
-            # Try Bot API (gives generic "You've been invited" preview)
+            # Try Bot API export_chat_invite_link (primary invite link - may show generic "You've been invited" preview)
             if bot_chat_id:
                 try:
-                    invite_link_obj = await context.bot.create_chat_invite_link(
-                        chat_id=bot_chat_id,
-                        member_limit=2
-                    )
-                    invite_link = invite_link_obj.invite_link
-                    print(f"✅ P2P Invite link created via Bot API: {invite_link}")
+                    invite_link = await context.bot.export_chat_invite_link(chat_id=bot_chat_id)
+                    print(f"✅ P2P Invite link exported via Bot API (primary): {invite_link}")
                 except Exception as bot_err:
-                    print(f"⚠️ P2P Bot API invite link failed: {bot_err}")
+                    print(f"⚠️ P2P Bot API export invite link failed: {bot_err}")
+                    # Fallback to create_chat_invite_link with member_limit
+                    try:
+                        invite_link_obj = await context.bot.create_chat_invite_link(
+                            chat_id=bot_chat_id,
+                            member_limit=2
+                        )
+                        invite_link = invite_link_obj.invite_link
+                        print(f"✅ P2P Invite link created via Bot API (with limit): {invite_link}")
+                    except Exception as create_err:
+                        print(f"⚠️ P2P Bot API create invite link also failed: {create_err}")
             
             # Fallback to Pyrogram if Bot API failed
             if not invite_link:
@@ -828,19 +834,25 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
             
-            # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
+            # Create invite link - try export_chat_invite_link first (primary link, may give generic preview)
             invite_link = None
-            # Try Bot API (gives generic "You've been invited" preview)
+            # Try Bot API export_chat_invite_link (primary invite link - may show generic "You've been invited" preview)
             if bot_chat_id:
                 try:
-                    invite_link_obj = await context.bot.create_chat_invite_link(
-                        chat_id=bot_chat_id,
-                        member_limit=2
-                    )
-                    invite_link = invite_link_obj.invite_link
-                    print(f"✅ OTC Invite link created via Bot API: {invite_link}")
+                    invite_link = await context.bot.export_chat_invite_link(chat_id=bot_chat_id)
+                    print(f"✅ OTC Invite link exported via Bot API (primary): {invite_link}")
                 except Exception as bot_err:
-                    print(f"⚠️ OTC Bot API invite link failed: {bot_err}")
+                    print(f"⚠️ OTC Bot API export invite link failed: {bot_err}")
+                    # Fallback to create_chat_invite_link with member_limit
+                    try:
+                        invite_link_obj = await context.bot.create_chat_invite_link(
+                            chat_id=bot_chat_id,
+                            member_limit=2
+                        )
+                        invite_link = invite_link_obj.invite_link
+                        print(f"✅ OTC Invite link created via Bot API (with limit): {invite_link}")
+                    except Exception as create_err:
+                        print(f"⚠️ OTC Bot API create invite link also failed: {create_err}")
             
             # Fallback to Pyrogram if Bot API failed
             if not invite_link:
