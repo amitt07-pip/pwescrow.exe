@@ -105,7 +105,7 @@ def generate_group_photo(buyer_username, seller_username):
     """Generate group photo with buyer and seller usernames"""
     try:
         # Open the template image
-        img = Image.open("attached_assets/Untitled_1762800642304.jpeg")
+        img = Image.open("Untitled_1762800642304.jpeg")
         draw = ImageDraw.Draw(img)
         
         # Strip whitespace and @ symbol from usernames
@@ -1873,7 +1873,7 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
         )
         try:
-            with open('attached_assets/canvas_1762800859705.png', 'rb') as photo:
+            with open('photo_6316666496414845910_y.jpg', 'rb') as photo:
                 await update.message.reply_photo(
                     photo=photo,
                     caption=caption,
@@ -2012,7 +2012,7 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
         )
         try:
-            with open('attached_assets/canvas_1762800844102.png', 'rb') as photo:
+            with open('photo_6314481552062090385_y.jpg', 'rb') as photo:
                 await update.message.reply_photo(
                     photo=photo,
                     caption=caption,
