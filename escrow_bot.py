@@ -1353,14 +1353,23 @@ Thank you for using @PagaLEscrowBot 🙌
                         try:
                             chat_info = await context.bot.get_chat(release_data['chat_id'])
                             group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            # Generate no-limits invite link via bot
+                            try:
+                                invite_link_obj = await context.bot.create_chat_invite_link(
+                                    chat_id=release_data['chat_id'],
+                                    name="Deal Completed Invite"
+                                )
+                                invite_link = invite_link_obj.invite_link
+                            except Exception as invite_err:
+                                print(f"Error creating invite link: {invite_err}")
+                                invite_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
                             logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
 
 👤 <b>Buyer:</b> {release_data['buyer_username']}
 👤 <b>Seller:</b> {release_data['seller_username']}
 📋 <b>Group Type:</b> {group_type}
 💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+🔗 <b>Group:</b> <a href="{invite_link}">{chat_info.title}</a>"""
                             await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
                         except Exception as e:
                             print(f"Error sending logs message: {e}")
@@ -1475,14 +1484,23 @@ Thank you for using @PagaLEscrowBot 🙌
                         try:
                             chat_info = await context.bot.get_chat(release_data['chat_id'])
                             group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            # Generate no-limits invite link via bot
+                            try:
+                                invite_link_obj = await context.bot.create_chat_invite_link(
+                                    chat_id=release_data['chat_id'],
+                                    name="Deal Completed Invite"
+                                )
+                                invite_link = invite_link_obj.invite_link
+                            except Exception as invite_err:
+                                print(f"Error creating invite link: {invite_err}")
+                                invite_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
                             logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
 
 👤 <b>Buyer:</b> {release_data['buyer_username']}
 👤 <b>Seller:</b> {release_data['seller_username']}
 📋 <b>Group Type:</b> {group_type}
 💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+🔗 <b>Group:</b> <a href="{invite_link}">{chat_info.title}</a>"""
                             await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
                         except Exception as e:
                             print(f"Error sending logs message: {e}")
@@ -1622,14 +1640,23 @@ Thank you for using @PagaLEscrowBot 🙌
                         try:
                             chat_info = await context.bot.get_chat(refund_data['chat_id'])
                             group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            # Generate no-limits invite link via bot
+                            try:
+                                invite_link_obj = await context.bot.create_chat_invite_link(
+                                    chat_id=refund_data['chat_id'],
+                                    name="Deal Completed Invite"
+                                )
+                                invite_link = invite_link_obj.invite_link
+                            except Exception as invite_err:
+                                print(f"Error creating invite link: {invite_err}")
+                                invite_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
                             logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
 
 👤 <b>Buyer:</b> {refund_data['buyer_username']}
 👤 <b>Seller:</b> {refund_data['seller_username']}
 📋 <b>Group Type:</b> {group_type}
 💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+🔗 <b>Group:</b> <a href="{invite_link}">{chat_info.title}</a>"""
                             await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
                         except Exception as e:
                             print(f"Error sending logs message: {e}")
@@ -1735,14 +1762,23 @@ Thank you for using @PagaLEscrowBot 🙌
                         try:
                             chat_info = await context.bot.get_chat(refund_data['chat_id'])
                             group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
+                            # Generate no-limits invite link via bot
+                            try:
+                                invite_link_obj = await context.bot.create_chat_invite_link(
+                                    chat_id=refund_data['chat_id'],
+                                    name="Deal Completed Invite"
+                                )
+                                invite_link = invite_link_obj.invite_link
+                            except Exception as invite_err:
+                                print(f"Error creating invite link: {invite_err}")
+                                invite_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
                             logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
 
 👤 <b>Buyer:</b> {refund_data['buyer_username']}
 👤 <b>Seller:</b> {refund_data['seller_username']}
 📋 <b>Group Type:</b> {group_type}
 💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
+🔗 <b>Group:</b> <a href="{invite_link}">{chat_info.title}</a>"""
                             await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
                         except Exception as e:
                             print(f"Error sending logs message: {e}")
