@@ -635,28 +635,21 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
             
-            # Create invite link - try Pyrogram export_chat_invite_link first (userbot primary link, may give generic preview)
+            # Create invite link with member_limit=2
             invite_link = None
-            # Try Pyrogram (userbot) export_chat_invite_link - this exports the PRIMARY invite link
-            # The primary link might show generic "You've been invited" preview
-            try:
-                invite_link = await current_client.export_chat_invite_link(chat_id=supergroup.id)
-                print(f"✅ P2P Invite link exported via Pyrogram (userbot primary): {invite_link}")
-            except Exception as pyro_export_err:
-                print(f"⚠️ P2P Pyrogram export invite link failed: {pyro_export_err}")
-                # Fallback to Bot API create_chat_invite_link with member_limit
-                if bot_chat_id:
-                    try:
-                        invite_link_obj = await context.bot.create_chat_invite_link(
-                            chat_id=bot_chat_id,
-                            member_limit=2
-                        )
-                        invite_link = invite_link_obj.invite_link
-                        print(f"✅ P2P Invite link created via Bot API (with limit): {invite_link}")
-                    except Exception as bot_err:
-                        print(f"⚠️ P2P Bot API create invite link failed: {bot_err}")
+            # Try Bot API create_chat_invite_link with member_limit
+            if bot_chat_id:
+                try:
+                    invite_link_obj = await context.bot.create_chat_invite_link(
+                        chat_id=bot_chat_id,
+                        member_limit=2
+                    )
+                    invite_link = invite_link_obj.invite_link
+                    print(f"✅ P2P Invite link created via Bot API (with limit): {invite_link}")
+                except Exception as bot_err:
+                    print(f"⚠️ P2P Bot API create invite link failed: {bot_err}")
             
-            # Final fallback to Pyrogram create if all else failed
+            # Fallback to Pyrogram if Bot API failed
             if not invite_link:
                 try:
                     invite_link_obj = await current_client.create_chat_invite_link(
@@ -835,28 +828,21 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
             
-            # Create invite link - try Pyrogram export_chat_invite_link first (userbot primary link, may give generic preview)
+            # Create invite link with member_limit=2
             invite_link = None
-            # Try Pyrogram (userbot) export_chat_invite_link - this exports the PRIMARY invite link
-            # The primary link might show generic "You've been invited" preview
-            try:
-                invite_link = await current_client.export_chat_invite_link(chat_id=supergroup.id)
-                print(f"✅ OTC Invite link exported via Pyrogram (userbot primary): {invite_link}")
-            except Exception as pyro_export_err:
-                print(f"⚠️ OTC Pyrogram export invite link failed: {pyro_export_err}")
-                # Fallback to Bot API create_chat_invite_link with member_limit
-                if bot_chat_id:
-                    try:
-                        invite_link_obj = await context.bot.create_chat_invite_link(
-                            chat_id=bot_chat_id,
-                            member_limit=2
-                        )
-                        invite_link = invite_link_obj.invite_link
-                        print(f"✅ OTC Invite link created via Bot API (with limit): {invite_link}")
-                    except Exception as bot_err:
-                        print(f"⚠️ OTC Bot API create invite link failed: {bot_err}")
+            # Try Bot API create_chat_invite_link with member_limit
+            if bot_chat_id:
+                try:
+                    invite_link_obj = await context.bot.create_chat_invite_link(
+                        chat_id=bot_chat_id,
+                        member_limit=2
+                    )
+                    invite_link = invite_link_obj.invite_link
+                    print(f"✅ OTC Invite link created via Bot API (with limit): {invite_link}")
+                except Exception as bot_err:
+                    print(f"⚠️ OTC Bot API create invite link failed: {bot_err}")
             
-            # Final fallback to Pyrogram create if all else failed
+            # Fallback to Pyrogram if Bot API failed
             if not invite_link:
                 try:
                     invite_link_obj = await current_client.create_chat_invite_link(
