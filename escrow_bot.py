@@ -188,8 +188,37 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
     await update.message.reply_text(welcome_message, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=reply_markup)
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /menu command - placeholder for now"""
-    await update.message.reply_text("📋 Menu functionality coming soon...")
+    """Handle /menu command"""
+    welcome_message = """💫 @PagaLEscrowBot 💫
+Your Trustworthy Telegram Escrow Service
+
+Welcome to @PagaLEscrowBot. This bot provides a reliable escrow service for your transactions on Telegram.
+Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type /dispute and an arbitrator will join the group chat within 24 hours.
+
+🎟 ESCROW FEE:
+1.0% for P2P and 1.0% for OTC Flat
+
+🌐 [UPDATES](https://t.me/BSR_ShoppiE) - [VOUCHES](https://t.me/PagaL_Escrow_Vouches) ☑️
+
+💬 Proceed with /escrow (to start with a new escrow)
+
+⚠️ IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.
+
+💡 Type /menu to summon a menu with all bots features"""
+    
+    keyboard = [
+        [InlineKeyboardButton("COMMANDS LIST 🤖", callback_data="commands_list")],
+        [InlineKeyboardButton("☎️ CONTACT", callback_data="contact")],
+        [InlineKeyboardButton("Updates 🔃", url="http://t.me/Escrow_PagaL"), 
+         InlineKeyboardButton("Vouches ✔️", url="http://t.me/PagaL_Escrow_Vouches")],
+        [InlineKeyboardButton("WHAT IS ESCROW ❔", callback_data="what_is_escrow"),
+         InlineKeyboardButton("Instructions 🧑‍🏫", callback_data="instructions")],
+        [InlineKeyboardButton("Terms 📝", callback_data="terms")],
+        [InlineKeyboardButton("Invites 👤", callback_data="invites")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(welcome_message, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=reply_markup)
 
 async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /escrow command - show escrow type selection"""
