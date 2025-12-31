@@ -561,13 +561,13 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             bot_username = (await context.bot.get_me()).username
             await current_client.add_chat_members(supergroup.id, bot_username)
             
-            # Store the group number as the transaction ID for this chat
-            # Convert supergroup.id to the actual chat_id format used by bot
-            # Pyrogram returns negative IDs, so we use abs() to get the positive part
-            bot_chat_id = int(f"-100{abs(supergroup.id)}")
-            if bot_chat_id not in escrow_roles:
-                escrow_roles[bot_chat_id] = {}
-            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            # Detect the correct Bot API chat_id by trying both formats
+            print(f"🔍 P2P Pyrogram supergroup.id: {supergroup.id}")
+            candidate_ids = [supergroup.id]
+            # Only add converted ID if supergroup.id doesn't already start with -100
+            if not str(supergroup.id).startswith("-100"):
+                candidate_ids.append(int(f"-100{abs(supergroup.id)}"))
+            print(f"🔍 P2P candidate_ids: {candidate_ids}")
             
             # Small delay before promoting
             await asyncio.sleep(1)
@@ -608,10 +608,31 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Wait for bot admin permissions to propagate
             await asyncio.sleep(2)
             
+            # Find the correct Bot API chat_id by testing which one works
+            bot_chat_id = None
+            for cid in candidate_ids:
+                try:
+                    await context.bot.get_chat(cid)
+                    bot_chat_id = cid
+                    print(f"✅ P2P Bot API recognizes chat_id: {bot_chat_id}")
+                    break
+                except Exception as e:
+                    print(f"⚠️ P2P Bot API doesn't recognize chat_id {cid}: {e}")
+            
+            if not bot_chat_id:
+                # Default to first candidate if none worked
+                bot_chat_id = candidate_ids[0]
+                print(f"⚠️ P2P Using default chat_id: {bot_chat_id}")
+            
+            # Store the transaction ID for this chat
+            if bot_chat_id not in escrow_roles:
+                escrow_roles[bot_chat_id] = {}
+            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            
             # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
             invite_link = None
             # Try Bot API with retries (gives generic "You've been invited" preview)
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     invite_link_obj = await context.bot.create_chat_invite_link(
                         chat_id=bot_chat_id,
@@ -621,8 +642,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     print(f"✅ P2P Invite link created via Bot API: {invite_link}")
                     break
                 except Exception as bot_err:
-                    print(f"⚠️ Bot API invite link attempt {attempt + 1} failed: {bot_err}")
-                    if attempt < 2:
+                    print(f"⚠️ P2P Bot API invite link attempt {attempt + 1} failed: {bot_err}")
+                    if attempt < 4:
                         await asyncio.sleep(2)
             
             # Fallback to Pyrogram if Bot API failed
@@ -635,7 +656,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     invite_link = invite_link_obj.invite_link
                     print(f"✅ P2P Invite link created via Pyrogram (fallback): {invite_link}")
                 except Exception as pyro_err:
-                    print(f"❌ Pyrogram invite link also failed: {pyro_err}")
+                    print(f"❌ P2P Pyrogram invite link also failed: {pyro_err}")
                     raise Exception("Failed to create invite link")
             
             # Send anonymous welcome message (appears from the group name)
@@ -730,13 +751,13 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             bot_username = (await context.bot.get_me()).username
             await current_client.add_chat_members(supergroup.id, bot_username)
             
-            # Store the group number as the transaction ID for this chat
-            # Convert supergroup.id to the actual chat_id format used by bot
-            # Pyrogram returns negative IDs, so we use abs() to get the positive part
-            bot_chat_id = int(f"-100{abs(supergroup.id)}")
-            if bot_chat_id not in escrow_roles:
-                escrow_roles[bot_chat_id] = {}
-            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            # Detect the correct Bot API chat_id by trying both formats
+            print(f"🔍 OTC Pyrogram supergroup.id: {supergroup.id}")
+            candidate_ids = [supergroup.id]
+            # Only add converted ID if supergroup.id doesn't already start with -100
+            if not str(supergroup.id).startswith("-100"):
+                candidate_ids.append(int(f"-100{abs(supergroup.id)}"))
+            print(f"🔍 OTC candidate_ids: {candidate_ids}")
             
             # Small delay before promoting
             await asyncio.sleep(1)
@@ -777,21 +798,42 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Wait for bot admin permissions to propagate
             await asyncio.sleep(2)
             
+            # Find the correct Bot API chat_id by testing which one works
+            bot_chat_id = None
+            for cid in candidate_ids:
+                try:
+                    await context.bot.get_chat(cid)
+                    bot_chat_id = cid
+                    print(f"✅ OTC Bot API recognizes chat_id: {bot_chat_id}")
+                    break
+                except Exception as e:
+                    print(f"⚠️ OTC Bot API doesn't recognize chat_id {cid}: {e}")
+            
+            if not bot_chat_id:
+                # Default to first candidate if none worked
+                bot_chat_id = candidate_ids[0]
+                print(f"⚠️ OTC Using default chat_id: {bot_chat_id}")
+            
+            # Store the transaction ID for this chat
+            if bot_chat_id not in escrow_roles:
+                escrow_roles[bot_chat_id] = {}
+            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            
             # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
             invite_link = None
             # Try Bot API with retries (gives generic "You've been invited" preview)
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     invite_link_obj = await context.bot.create_chat_invite_link(
                         chat_id=bot_chat_id,
                         member_limit=2
                     )
                     invite_link = invite_link_obj.invite_link
-                    print(f"✅ Product Invite link created via Bot API: {invite_link}")
+                    print(f"✅ OTC Invite link created via Bot API: {invite_link}")
                     break
                 except Exception as bot_err:
-                    print(f"⚠️ Bot API invite link attempt {attempt + 1} failed: {bot_err}")
-                    if attempt < 2:
+                    print(f"⚠️ OTC Bot API invite link attempt {attempt + 1} failed: {bot_err}")
+                    if attempt < 4:
                         await asyncio.sleep(2)
             
             # Fallback to Pyrogram if Bot API failed
@@ -802,9 +844,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                         member_limit=2
                     )
                     invite_link = invite_link_obj.invite_link
-                    print(f"✅ Product Invite link created via Pyrogram (fallback): {invite_link}")
+                    print(f"✅ OTC Invite link created via Pyrogram (fallback): {invite_link}")
                 except Exception as pyro_err:
-                    print(f"❌ Pyrogram invite link also failed: {pyro_err}")
+                    print(f"❌ OTC Pyrogram invite link also failed: {pyro_err}")
                     raise Exception("Failed to create invite link")
             
             # Send anonymous welcome message (appears from the group name)
