@@ -605,24 +605,30 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Small delay for promotion to take effect
             await asyncio.sleep(1)
             
-            # Wait for bot admin permissions to propagate
-            await asyncio.sleep(2)
-            
-            # Find the correct Bot API chat_id by testing which one works
+            # Poll Bot API until it recognizes the chat (up to 30 seconds)
             bot_chat_id = None
-            for cid in candidate_ids:
-                try:
-                    await context.bot.get_chat(cid)
-                    bot_chat_id = cid
-                    print(f"✅ P2P Bot API recognizes chat_id: {bot_chat_id}")
+            bot_user = await context.bot.get_me()
+            print(f"🔍 P2P Waiting for Bot API to recognize chat...")
+            for poll_attempt in range(15):  # 15 attempts * 2 seconds = 30 seconds max
+                for cid in candidate_ids:
+                    try:
+                        # Try to get the bot's membership status in the chat
+                        member = await context.bot.get_chat_member(cid, bot_user.id)
+                        if member.status in ['administrator', 'creator', 'member']:
+                            bot_chat_id = cid
+                            print(f"✅ P2P Bot API recognizes chat_id: {bot_chat_id} (status: {member.status}) after {poll_attempt + 1} attempts")
+                            break
+                    except Exception as e:
+                        pass  # Chat not visible yet, continue polling
+                if bot_chat_id:
                     break
-                except Exception as e:
-                    print(f"⚠️ P2P Bot API doesn't recognize chat_id {cid}: {e}")
+                print(f"⏳ P2P Poll attempt {poll_attempt + 1}/15 - Bot API doesn't see chat yet...")
+                await asyncio.sleep(2)
             
             if not bot_chat_id:
-                # Default to first candidate if none worked
+                # Default to first candidate if none worked after polling
                 bot_chat_id = candidate_ids[0]
-                print(f"⚠️ P2P Using default chat_id: {bot_chat_id}")
+                print(f"⚠️ P2P Bot API never recognized chat, using default: {bot_chat_id}")
             
             # Store the transaction ID for this chat
             if bot_chat_id not in escrow_roles:
@@ -631,8 +637,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
             invite_link = None
-            # Try Bot API with retries (gives generic "You've been invited" preview)
-            for attempt in range(5):
+            # Try Bot API (gives generic "You've been invited" preview)
+            if bot_chat_id:
                 try:
                     invite_link_obj = await context.bot.create_chat_invite_link(
                         chat_id=bot_chat_id,
@@ -640,11 +646,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     )
                     invite_link = invite_link_obj.invite_link
                     print(f"✅ P2P Invite link created via Bot API: {invite_link}")
-                    break
                 except Exception as bot_err:
-                    print(f"⚠️ P2P Bot API invite link attempt {attempt + 1} failed: {bot_err}")
-                    if attempt < 4:
-                        await asyncio.sleep(2)
+                    print(f"⚠️ P2P Bot API invite link failed: {bot_err}")
             
             # Fallback to Pyrogram if Bot API failed
             if not invite_link:
@@ -795,24 +798,30 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Small delay for promotion to take effect
             await asyncio.sleep(1)
             
-            # Wait for bot admin permissions to propagate
-            await asyncio.sleep(2)
-            
-            # Find the correct Bot API chat_id by testing which one works
+            # Poll Bot API until it recognizes the chat (up to 30 seconds)
             bot_chat_id = None
-            for cid in candidate_ids:
-                try:
-                    await context.bot.get_chat(cid)
-                    bot_chat_id = cid
-                    print(f"✅ OTC Bot API recognizes chat_id: {bot_chat_id}")
+            bot_user = await context.bot.get_me()
+            print(f"🔍 OTC Waiting for Bot API to recognize chat...")
+            for poll_attempt in range(15):  # 15 attempts * 2 seconds = 30 seconds max
+                for cid in candidate_ids:
+                    try:
+                        # Try to get the bot's membership status in the chat
+                        member = await context.bot.get_chat_member(cid, bot_user.id)
+                        if member.status in ['administrator', 'creator', 'member']:
+                            bot_chat_id = cid
+                            print(f"✅ OTC Bot API recognizes chat_id: {bot_chat_id} (status: {member.status}) after {poll_attempt + 1} attempts")
+                            break
+                    except Exception as e:
+                        pass  # Chat not visible yet, continue polling
+                if bot_chat_id:
                     break
-                except Exception as e:
-                    print(f"⚠️ OTC Bot API doesn't recognize chat_id {cid}: {e}")
+                print(f"⏳ OTC Poll attempt {poll_attempt + 1}/15 - Bot API doesn't see chat yet...")
+                await asyncio.sleep(2)
             
             if not bot_chat_id:
-                # Default to first candidate if none worked
+                # Default to first candidate if none worked after polling
                 bot_chat_id = candidate_ids[0]
-                print(f"⚠️ OTC Using default chat_id: {bot_chat_id}")
+                print(f"⚠️ OTC Bot API never recognized chat, using default: {bot_chat_id}")
             
             # Store the transaction ID for this chat
             if bot_chat_id not in escrow_roles:
@@ -821,8 +830,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
             invite_link = None
-            # Try Bot API with retries (gives generic "You've been invited" preview)
-            for attempt in range(5):
+            # Try Bot API (gives generic "You've been invited" preview)
+            if bot_chat_id:
                 try:
                     invite_link_obj = await context.bot.create_chat_invite_link(
                         chat_id=bot_chat_id,
@@ -830,11 +839,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     )
                     invite_link = invite_link_obj.invite_link
                     print(f"✅ OTC Invite link created via Bot API: {invite_link}")
-                    break
                 except Exception as bot_err:
-                    print(f"⚠️ OTC Bot API invite link attempt {attempt + 1} failed: {bot_err}")
-                    if attempt < 4:
-                        await asyncio.sleep(2)
+                    print(f"⚠️ OTC Bot API invite link failed: {bot_err}")
             
             # Fallback to Pyrogram if Bot API failed
             if not invite_link:
