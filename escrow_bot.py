@@ -156,22 +156,22 @@ def generate_group_photo(buyer_username, seller_username):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
-    welcome_message = """💫 @PagaLEscrowBot 💫
+    welcome_message = """💫 *@PagaLEscrowBot* 💫
 Your Trustworthy Telegram Escrow Service
 
-Welcome to @PagaLEscrowBot. This bot provides a reliable escrow service for your transactions on Telegram.
-Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type /dispute and an arbitrator will join the group chat within 24 hours.
+Welcome to *@PagaLEscrowBot*. This bot provides a reliable escrow service for your transactions on Telegram.
+Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type `/dispute` and an arbitrator will join the group chat within 24 hours.
 
-🎟 ESCROW FEE:
+🎟 *ESCROW FEE:*
 1.0% for P2P and 1.0% for OTC Flat
 
-🌐 [UPDATES](https://t.me/BSR_ShoppiE) - [VOUCHES](https://t.me/PagaL_Escrow_Vouches) ☑️
+🌐 [(UPDATES)](https://t.me/BSR_ShoppiE) - [(VOUCHES)](https://t.me/PagaL_Escrow_Vouches) ☑️
 
-💬 Proceed with /escrow (to start with a new escrow)
+💬 *Proceed with* /escrow *(to start with a new escrow)*
 
-⚠️ IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.
+⚠️ *IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.*
 
-💡 Type /menu to summon a menu with all bots features"""
+💡 *Type* `/menu` *to summon a menu with all bots features*"""
     
     keyboard = [
         [InlineKeyboardButton("COMMANDS LIST 🤖", callback_data="commands_list")],
@@ -189,22 +189,22 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /menu command"""
-    welcome_message = """💫 @PagaLEscrowBot 💫
+    welcome_message = """💫 *@PagaLEscrowBot* 💫
 Your Trustworthy Telegram Escrow Service
 
-Welcome to @PagaLEscrowBot. This bot provides a reliable escrow service for your transactions on Telegram.
-Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type /dispute and an arbitrator will join the group chat within 24 hours.
+Welcome to *@PagaLEscrowBot*. This bot provides a reliable escrow service for your transactions on Telegram.
+Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type `/dispute` and an arbitrator will join the group chat within 24 hours.
 
-🎟 ESCROW FEE:
+🎟 *ESCROW FEE:*
 1.0% for P2P and 1.0% for OTC Flat
 
-🌐 [UPDATES](https://t.me/BSR_ShoppiE) - [VOUCHES](https://t.me/PagaL_Escrow_Vouches) ☑️
+🌐 [(UPDATES)](https://t.me/BSR_ShoppiE) - [(VOUCHES)](https://t.me/PagaL_Escrow_Vouches) ☑️
 
-💬 Proceed with /escrow (to start with a new escrow)
+💬 *Proceed with* /escrow *(to start with a new escrow)*
 
-⚠️ IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.
+⚠️ *IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.*
 
-💡 Type /menu to summon a menu with all bots features"""
+💡 *Type* `/menu` *to summon a menu with all bots features*"""
     
     keyboard = [
         [InlineKeyboardButton("COMMANDS LIST 🤖", callback_data="commands_list")],
