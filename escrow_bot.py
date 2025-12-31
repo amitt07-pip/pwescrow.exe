@@ -42,15 +42,46 @@ LOGS_CHANNEL_ID = os.getenv("LOGS_CHANNEL_ID", "")
 BSC_USDT_CONTRACT = "0x55d398326f99059fF775485246999027B3197955"
 TRON_USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 
-# Initialize Pyrogram user client (for group creation)
-user_client = None
+# Second user client phone number
+PHONE_2 = os.getenv("TELEGRAM_PHONE_2", "+917050801212")
+
+# Initialize Pyrogram user clients pool (for group creation with alternation)
+user_clients = []
+user_client_index = 0
+user_client_lock = asyncio.Lock()
+
+# Initialize first client
 if API_ID and API_HASH and PHONE:
-    user_client = Client(
+    user_clients.append(Client(
         "escrow_user_session",
         api_id=int(API_ID),
         api_hash=API_HASH,
         phone_number=PHONE
-    )
+    ))
+
+# Initialize second client (uses same API_ID and API_HASH)
+if API_ID and API_HASH and PHONE_2:
+    user_clients.append(Client(
+        "escrow_user_session_2",
+        api_id=int(API_ID),
+        api_hash=API_HASH,
+        phone_number=PHONE_2
+    ))
+
+# Keep user_client for backward compatibility (points to first client or None)
+user_client = user_clients[0] if user_clients else None
+
+async def get_next_user_client():
+    """Get the next user client in round-robin fashion for group creation."""
+    global user_client_index
+    if not user_clients:
+        return None
+    
+    async with user_client_lock:
+        client = user_clients[user_client_index % len(user_clients)]
+        user_client_index += 1
+        print(f"🔄 Using user client {user_client_index % len(user_clients)} for group creation")
+        return client
 
 # Track buyer and seller declarations per chat
 escrow_roles = {}  # {chat_id: {'buyer': {...}, 'seller': {...}}}
@@ -498,15 +529,17 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         await query.answer()
         await query.edit_message_text("**Creating a safe trading place for you please wait, please wait...**", parse_mode='Markdown')
         
-        if not user_client:
+        # Get next user client in round-robin fashion
+        current_client = await get_next_user_client()
+        if not current_client:
             error_msg = "❌ Group creation is not configured. Please contact the bot administrator."
             await query.edit_message_text(error_msg)
             return
         
         try:
             # Start user client if not started
-            if not user_client.is_connected:
-                await user_client.start()
+            if not current_client.is_connected:
+                await current_client.start()
             
             # Get user info
             user = query.from_user
@@ -516,7 +549,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             group_name = f"P2P Escrow By PAGAL Bot"
             
             # Create a supergroup (doesn't require initial members)
-            supergroup = await user_client.create_supergroup(
+            supergroup = await current_client.create_supergroup(
                 title=group_name,
                 description=""
             )
@@ -526,7 +559,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
-            await user_client.add_chat_members(supergroup.id, bot_username)
+            await current_client.add_chat_members(supergroup.id, bot_username)
             
             # Store the group number as the transaction ID for this chat
             # Convert supergroup.id to the actual chat_id format used by bot
@@ -540,7 +573,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await asyncio.sleep(1)
             
             # Promote bot to admin with full permissions
-            await user_client.promote_chat_member(
+            await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=bot_username,
                 privileges=ChatPrivileges(
@@ -557,8 +590,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             )
             
             # Promote user to anonymous admin temporarily to send message on behalf of group
-            me = await user_client.get_me()
-            await user_client.promote_chat_member(
+            me = await current_client.get_me()
+            await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=me.id,
                 privileges=ChatPrivileges(
@@ -576,7 +609,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await asyncio.sleep(2)
             
             # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await user_client.create_chat_invite_link(
+            invite_link_obj = await current_client.create_chat_invite_link(
                 chat_id=supergroup.id,
                 member_limit=2
             )
@@ -587,14 +620,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
 ✅ Please start with /dd command and fill the DealInfo Form"""
             
-            sent_message = await user_client.send_message(
+            sent_message = await current_client.send_message(
                 chat_id=supergroup.id,
                 text=f"<b>{welcome_text}</b>",
                 parse_mode=enums.ParseMode.HTML
             )
             
             # Pin the welcome message
-            await user_client.pin_chat_message(
+            await current_client.pin_chat_message(
                 chat_id=supergroup.id,
                 message_id=sent_message.id,
                 disable_notification=True
@@ -603,9 +636,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Delete service messages (join/leave notifications) BEFORE leaving
             try:
                 # Get recent messages to find and delete service messages while still in group
-                async for message in user_client.get_chat_history(supergroup.id, limit=10):
+                async for message in current_client.get_chat_history(supergroup.id, limit=10):
                     if message.service:
-                        await user_client.delete_messages(supergroup.id, message.id)
+                        await current_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
             
@@ -613,7 +646,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await asyncio.sleep(1)
             
             # User account leaves the group (and won't rejoin)
-            await user_client.leave_chat(supergroup.id)
+            await current_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
@@ -643,15 +676,17 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         await query.answer()
         await query.edit_message_text("**Creating a safe trading place for you please wait, please wait...**", parse_mode='Markdown')
         
-        if not user_client:
+        # Get next user client in round-robin fashion
+        current_client = await get_next_user_client()
+        if not current_client:
             error_msg = "❌ Group creation is not configured. Please contact the bot administrator."
             await query.edit_message_text(error_msg)
             return
         
         try:
             # Start user client if not started
-            if not user_client.is_connected:
-                await user_client.start()
+            if not current_client.is_connected:
+                await current_client.start()
             
             # Get user info
             user = query.from_user
@@ -661,7 +696,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             group_name = f"OTC Escrow By PAGAL Bot"
             
             # Create a supergroup (doesn't require initial members)
-            supergroup = await user_client.create_supergroup(
+            supergroup = await current_client.create_supergroup(
                 title=group_name,
                 description=""
             )
@@ -671,7 +706,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
-            await user_client.add_chat_members(supergroup.id, bot_username)
+            await current_client.add_chat_members(supergroup.id, bot_username)
             
             # Store the group number as the transaction ID for this chat
             # Convert supergroup.id to the actual chat_id format used by bot
@@ -685,7 +720,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await asyncio.sleep(1)
             
             # Promote bot to admin with full permissions
-            await user_client.promote_chat_member(
+            await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=bot_username,
                 privileges=ChatPrivileges(
@@ -702,8 +737,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             )
             
             # Promote user to anonymous admin temporarily to send message on behalf of group
-            me = await user_client.get_me()
-            await user_client.promote_chat_member(
+            me = await current_client.get_me()
+            await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=me.id,
                 privileges=ChatPrivileges(
@@ -721,7 +756,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await asyncio.sleep(2)
             
             # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await user_client.create_chat_invite_link(
+            invite_link_obj = await current_client.create_chat_invite_link(
                 chat_id=supergroup.id,
                 member_limit=2
             )
@@ -732,14 +767,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
 ✅ Please start with /dd command and fill the DealInfo Form"""
             
-            sent_message = await user_client.send_message(
+            sent_message = await current_client.send_message(
                 chat_id=supergroup.id,
                 text=f"<b>{welcome_text}</b>",
                 parse_mode=enums.ParseMode.HTML
             )
             
             # Pin the welcome message
-            await user_client.pin_chat_message(
+            await current_client.pin_chat_message(
                 chat_id=supergroup.id,
                 message_id=sent_message.id,
                 disable_notification=True
@@ -748,9 +783,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Delete service messages (join/leave notifications) BEFORE leaving
             try:
                 # Get recent messages to find and delete service messages while still in group
-                async for message in user_client.get_chat_history(supergroup.id, limit=10):
+                async for message in current_client.get_chat_history(supergroup.id, limit=10):
                     if message.service:
-                        await user_client.delete_messages(supergroup.id, message.id)
+                        await current_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
             
@@ -758,7 +793,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await asyncio.sleep(1)
             
             # User account leaves the group (and won't rejoin)
-            await user_client.leave_chat(supergroup.id)
+            await current_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
