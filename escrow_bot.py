@@ -608,13 +608,35 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Wait for bot admin permissions to propagate
             await asyncio.sleep(2)
             
-            # Create invite link using Bot API (gives generic "You've been invited" preview)
-            invite_link_obj = await context.bot.create_chat_invite_link(
-                chat_id=bot_chat_id,
-                member_limit=2
-            )
-            invite_link = invite_link_obj.invite_link
-            print(f"✅ P2P Invite link created successfully: {invite_link}")
+            # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
+            invite_link = None
+            # Try Bot API with retries (gives generic "You've been invited" preview)
+            for attempt in range(3):
+                try:
+                    invite_link_obj = await context.bot.create_chat_invite_link(
+                        chat_id=bot_chat_id,
+                        member_limit=2
+                    )
+                    invite_link = invite_link_obj.invite_link
+                    print(f"✅ P2P Invite link created via Bot API: {invite_link}")
+                    break
+                except Exception as bot_err:
+                    print(f"⚠️ Bot API invite link attempt {attempt + 1} failed: {bot_err}")
+                    if attempt < 2:
+                        await asyncio.sleep(2)
+            
+            # Fallback to Pyrogram if Bot API failed
+            if not invite_link:
+                try:
+                    invite_link_obj = await current_client.create_chat_invite_link(
+                        chat_id=supergroup.id,
+                        member_limit=2
+                    )
+                    invite_link = invite_link_obj.invite_link
+                    print(f"✅ P2P Invite link created via Pyrogram (fallback): {invite_link}")
+                except Exception as pyro_err:
+                    print(f"❌ Pyrogram invite link also failed: {pyro_err}")
+                    raise Exception("Failed to create invite link")
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -755,13 +777,35 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Wait for bot admin permissions to propagate
             await asyncio.sleep(2)
             
-            # Create invite link using Bot API (gives generic "You've been invited" preview)
-            invite_link_obj = await context.bot.create_chat_invite_link(
-                chat_id=bot_chat_id,
-                member_limit=2
-            )
-            invite_link = invite_link_obj.invite_link
-            print(f"✅ Product Invite link created successfully: {invite_link}")
+            # Create invite link - try Bot API first (gives generic preview), fallback to Pyrogram
+            invite_link = None
+            # Try Bot API with retries (gives generic "You've been invited" preview)
+            for attempt in range(3):
+                try:
+                    invite_link_obj = await context.bot.create_chat_invite_link(
+                        chat_id=bot_chat_id,
+                        member_limit=2
+                    )
+                    invite_link = invite_link_obj.invite_link
+                    print(f"✅ Product Invite link created via Bot API: {invite_link}")
+                    break
+                except Exception as bot_err:
+                    print(f"⚠️ Bot API invite link attempt {attempt + 1} failed: {bot_err}")
+                    if attempt < 2:
+                        await asyncio.sleep(2)
+            
+            # Fallback to Pyrogram if Bot API failed
+            if not invite_link:
+                try:
+                    invite_link_obj = await current_client.create_chat_invite_link(
+                        chat_id=supergroup.id,
+                        member_limit=2
+                    )
+                    invite_link = invite_link_obj.invite_link
+                    print(f"✅ Product Invite link created via Pyrogram (fallback): {invite_link}")
+                except Exception as pyro_err:
+                    print(f"❌ Pyrogram invite link also failed: {pyro_err}")
+                    raise Exception("Failed to create invite link")
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
