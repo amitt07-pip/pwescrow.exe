@@ -36,7 +36,7 @@ def main():
     app.add_handler(CommandHandler("add", escrow_bot.add_command))
     app.add_handler(CommandHandler("fakedepo", escrow_bot.fakedepo_command))
     app.add_handler(CommandHandler("link", escrow_bot.link_command))
-    app.add_handler(CommandHandler("blacklist", escrow_bot.blacklist_command))
+    app.add_handler(CommandHandler("ban", escrow_bot.ban_command))
     app.add_handler(CommandHandler("leave", escrow_bot.leave_command))
     app.add_handler(CommandHandler("release", escrow_bot.release_command))
     app.add_handler(CommandHandler("refund", escrow_bot.refund_command))

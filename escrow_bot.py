@@ -3045,8 +3045,8 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         print(f"❌ Failed to generate invite link: {e}")
 
-async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /blacklist command - admin only, ban replied user or by username"""
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ban command - admin only, ban replied user or by username"""
     user = update.effective_user
     chat = update.effective_chat
     
@@ -3092,14 +3092,14 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not found:
                 await update.message.reply_text(
                     f"<b>❌ Could not find user @{username}.</b>\n\n"
-                    "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> instead for guaranteed accuracy.",
+                    "<b>Tip:</b> Reply to their message and use <code>/ban</code> instead for guaranteed accuracy.",
                     parse_mode='HTML'
                 )
                 return
         except Exception as e:
             await update.message.reply_text(
                 f"<b>❌ Failed to lookup user @{username}: {str(e)}</b>\n\n"
-                "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> instead.",
+                "<b>Tip:</b> Reply to their message and use <code>/ban</code> instead.",
                 parse_mode='HTML'
             )
             return
@@ -3111,8 +3111,8 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "<b>⚠️ Usage:</b>\n"
-            "• Reply to a message: <code>/blacklist</code>\n"
-            "• By username: <code>/blacklist @username</code>",
+            "• Reply to a message: <code>/ban</code>\n"
+            "• By username: <code>/ban @username</code>",
             parse_mode='HTML'
         )
         return
@@ -3120,7 +3120,7 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Don't ban other admins
     if target_user_id in ADMIN_IDS:
         await update.message.reply_text(
-            "<b>⚠️ Cannot blacklist other admins.</b>",
+            "<b>⚠️ Cannot ban other admins.</b>",
             parse_mode='HTML'
         )
         return
@@ -3130,7 +3130,7 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.ban_chat_member(chat_id=chat.id, user_id=target_user_id)
         
         await update.message.reply_text(
-            f"<b>✅ User {target_display_name} has been blacklisted and banned from this group.</b>",
+            f"<b>✅ User {target_display_name} has been banned from this group.</b>",
             parse_mode='HTML'
         )
     except Exception as e:
@@ -3693,7 +3693,7 @@ def main():
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("fakedepo", fakedepo_command))
     app.add_handler(CommandHandler("link", link_command))
-    app.add_handler(CommandHandler("blacklist", blacklist_command))
+    app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(CommandHandler("verify", verify_command))
     app.add_handler(CommandHandler("release", release_command))
     app.add_handler(CommandHandler("refund", refund_command))
