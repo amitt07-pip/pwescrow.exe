@@ -589,25 +589,19 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 description=""
             )
             
-            # Small delay to ensure group is fully created
-            await asyncio.sleep(2)
+            # Reduced delay - group is usually ready quickly
+            await asyncio.sleep(0.5)
             
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
             await current_client.add_chat_members(supergroup.id, bot_username)
             
-            # Detect the correct Bot API chat_id by trying both formats
             print(f"🔍 P2P Pyrogram supergroup.id: {supergroup.id}")
-            candidate_ids = [supergroup.id]
-            # Only add converted ID if supergroup.id doesn't already start with -100
-            if not str(supergroup.id).startswith("-100"):
-                candidate_ids.append(int(f"-100{abs(supergroup.id)}"))
-            print(f"🔍 P2P candidate_ids: {candidate_ids}")
             
-            # Small delay before promoting
-            await asyncio.sleep(1)
+            # Reduced delay before promoting
+            await asyncio.sleep(0.3)
             
-            # Promote bot to admin with full permissions (anonymous to potentially get generic invite preview)
+            # Promote bot to admin with full permissions
             await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=bot_username,
@@ -624,28 +618,12 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin temporarily to send message on behalf of group
-            me = await current_client.get_me()
-            await current_client.promote_chat_member(
-                chat_id=supergroup.id,
-                user_id=me.id,
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_pin_messages=True,
-                    is_anonymous=True
-                )
-            )
-            
-            # Small delay for promotion to take effect
-            await asyncio.sleep(1)
-            
             # Store the transaction ID for this chat
             if supergroup.id not in escrow_roles:
                 escrow_roles[supergroup.id] = {}
             escrow_roles[supergroup.id]['transaction_id'] = random_number
             
-            # Create invite link with member_limit=2 using Pyrogram
+            # Create invite link with member_limit=2 using Pyrogram (creator has rights immediately)
             try:
                 invite_link_obj = await current_client.create_chat_invite_link(
                     chat_id=supergroup.id,
@@ -656,38 +634,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             except Exception as pyro_err:
                 print(f"❌ P2P Pyrogram invite link failed: {pyro_err}")
                 raise Exception("Failed to create invite link")
-            
-            # Send anonymous welcome message (appears from the group name)
-            welcome_text = """📍 Hey there traders! Welcome to our escrow service.
-✅ Please start with /dd command and fill the DealInfo Form"""
-            
-            sent_message = await current_client.send_message(
-                chat_id=supergroup.id,
-                text=f"<b>{welcome_text}</b>",
-                parse_mode=enums.ParseMode.HTML
-            )
-            
-            # Pin the welcome message
-            await current_client.pin_chat_message(
-                chat_id=supergroup.id,
-                message_id=sent_message.id,
-                disable_notification=True
-            )
-            
-            # Delete service messages (join/leave notifications) BEFORE leaving
-            try:
-                # Get recent messages to find and delete service messages while still in group
-                async for message in current_client.get_chat_history(supergroup.id, limit=10):
-                    if message.service:
-                        await current_client.delete_messages(supergroup.id, message.id)
-            except Exception as e:
-                print(f"Could not delete service messages: {e}")
-            
-            # Small delay before leaving
-            await asyncio.sleep(1)
-            
-            # User account leaves the group (and won't rejoin)
-            await current_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
@@ -705,7 +651,39 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
 
 <blockquote>⚠️ Note: This link is for 2 members only—third parties are not allowed to join.</blockquote>"""
             
+            # Send invite link to user FIRST (fast response)
             await query.edit_message_text(success_message, parse_mode='HTML')
+            
+            # Run cleanup tasks in background (welcome message, pin, delete service msgs, leave)
+            async def p2p_cleanup():
+                try:
+                    # Send anonymous welcome message
+                    welcome_text = """📍 Hey there traders! Welcome to our escrow service.
+✅ Please start with /dd command and fill the DealInfo Form"""
+                    sent_message = await current_client.send_message(
+                        chat_id=supergroup.id,
+                        text=f"<b>{welcome_text}</b>",
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    # Pin the welcome message
+                    await current_client.pin_chat_message(
+                        chat_id=supergroup.id,
+                        message_id=sent_message.id,
+                        disable_notification=True
+                    )
+                    # Delete service messages
+                    try:
+                        async for message in current_client.get_chat_history(supergroup.id, limit=10):
+                            if message.service:
+                                await current_client.delete_messages(supergroup.id, message.id)
+                    except Exception as e:
+                        print(f"Could not delete service messages: {e}")
+                    # User account leaves the group
+                    await current_client.leave_chat(supergroup.id)
+                except Exception as e:
+                    print(f"P2P cleanup error: {e}")
+            
+            asyncio.create_task(p2p_cleanup())
             
         except FloodWait as e:
             await query.edit_message_text(f"⏳ Rate limit hit. Please wait {e.value} seconds and try again.")
@@ -742,25 +720,19 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 description=""
             )
             
-            # Small delay to ensure group is fully created
-            await asyncio.sleep(2)
+            # Reduced delay - group is usually ready quickly
+            await asyncio.sleep(0.5)
             
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
             await current_client.add_chat_members(supergroup.id, bot_username)
             
-            # Detect the correct Bot API chat_id by trying both formats
             print(f"🔍 OTC Pyrogram supergroup.id: {supergroup.id}")
-            candidate_ids = [supergroup.id]
-            # Only add converted ID if supergroup.id doesn't already start with -100
-            if not str(supergroup.id).startswith("-100"):
-                candidate_ids.append(int(f"-100{abs(supergroup.id)}"))
-            print(f"🔍 OTC candidate_ids: {candidate_ids}")
             
-            # Small delay before promoting
-            await asyncio.sleep(1)
+            # Reduced delay before promoting
+            await asyncio.sleep(0.3)
             
-            # Promote bot to admin with full permissions (anonymous to potentially get generic invite preview)
+            # Promote bot to admin with full permissions
             await current_client.promote_chat_member(
                 chat_id=supergroup.id,
                 user_id=bot_username,
@@ -777,28 +749,12 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin temporarily to send message on behalf of group
-            me = await current_client.get_me()
-            await current_client.promote_chat_member(
-                chat_id=supergroup.id,
-                user_id=me.id,
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_pin_messages=True,
-                    is_anonymous=True
-                )
-            )
-            
-            # Small delay for promotion to take effect
-            await asyncio.sleep(1)
-            
             # Store the transaction ID for this chat
             if supergroup.id not in escrow_roles:
                 escrow_roles[supergroup.id] = {}
             escrow_roles[supergroup.id]['transaction_id'] = random_number
             
-            # Create invite link with member_limit=2 using Pyrogram
+            # Create invite link with member_limit=2 using Pyrogram (creator has rights immediately)
             try:
                 invite_link_obj = await current_client.create_chat_invite_link(
                     chat_id=supergroup.id,
@@ -809,38 +765,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             except Exception as pyro_err:
                 print(f"❌ OTC Pyrogram invite link failed: {pyro_err}")
                 raise Exception("Failed to create invite link")
-            
-            # Send anonymous welcome message (appears from the group name)
-            welcome_text = """📍 Hey there traders! Welcome to our escrow service.
-✅ Please start with /dd command and fill the DealInfo Form"""
-            
-            sent_message = await current_client.send_message(
-                chat_id=supergroup.id,
-                text=f"<b>{welcome_text}</b>",
-                parse_mode=enums.ParseMode.HTML
-            )
-            
-            # Pin the welcome message
-            await current_client.pin_chat_message(
-                chat_id=supergroup.id,
-                message_id=sent_message.id,
-                disable_notification=True
-            )
-            
-            # Delete service messages (join/leave notifications) BEFORE leaving
-            try:
-                # Get recent messages to find and delete service messages while still in group
-                async for message in current_client.get_chat_history(supergroup.id, limit=10):
-                    if message.service:
-                        await current_client.delete_messages(supergroup.id, message.id)
-            except Exception as e:
-                print(f"Could not delete service messages: {e}")
-            
-            # Small delay before leaving
-            await asyncio.sleep(1)
-            
-            # User account leaves the group (and won't rejoin)
-            await current_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
@@ -858,7 +782,39 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
 
 <blockquote>⚠️ Note: This link is for 2 members only—third parties are not allowed to join.</blockquote>"""
             
+            # Send invite link to user FIRST (fast response)
             await query.edit_message_text(success_message, parse_mode='HTML')
+            
+            # Run cleanup tasks in background (welcome message, pin, delete service msgs, leave)
+            async def otc_cleanup():
+                try:
+                    # Send anonymous welcome message
+                    welcome_text = """📍 Hey there traders! Welcome to our escrow service.
+✅ Please start with /dd command and fill the DealInfo Form"""
+                    sent_message = await current_client.send_message(
+                        chat_id=supergroup.id,
+                        text=f"<b>{welcome_text}</b>",
+                        parse_mode=enums.ParseMode.HTML
+                    )
+                    # Pin the welcome message
+                    await current_client.pin_chat_message(
+                        chat_id=supergroup.id,
+                        message_id=sent_message.id,
+                        disable_notification=True
+                    )
+                    # Delete service messages
+                    try:
+                        async for message in current_client.get_chat_history(supergroup.id, limit=10):
+                            if message.service:
+                                await current_client.delete_messages(supergroup.id, message.id)
+                    except Exception as e:
+                        print(f"Could not delete service messages: {e}")
+                    # User account leaves the group
+                    await current_client.leave_chat(supergroup.id)
+                except Exception as e:
+                    print(f"OTC cleanup error: {e}")
+            
+            asyncio.create_task(otc_cleanup())
             
         except FloodWait as e:
             await query.edit_message_text(f"⏳ Rate limit hit. Please wait {e.value} seconds and try again.")
