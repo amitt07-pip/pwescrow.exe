@@ -353,25 +353,35 @@ async def dd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if this is a group
     if chat.type in ['group', 'supergroup']:
         try:
-            # Generate random 8-digit number starting with 9
-            random_number = random.randint(90000000, 99999999)
+            # Initialize chat in escrow_roles if not exists
+            if chat_id not in escrow_roles:
+                escrow_roles[chat_id] = {}
             
-            # Get current title to determine group type
-            current_title = chat.title
-            
-            # Only update if the title doesn't already have a number in parentheses
-            if "(" not in current_title:
-                # Determine escrow type based on current title
-                if "P2P" in current_title:
-                    new_title = f"P2P Escrow By PAGAL Bot ({random_number})"
-                elif "OTC" in current_title:
-                    new_title = f"OTC Escrow By PAGAL Bot ({random_number})"
-                else:
-                    new_title = f"Product Deal Escrow By PAGAL Bot ({random_number})"
+            # Only rename if not already renamed
+            if not escrow_roles[chat_id].get('group_renamed', False):
+                # Use existing transaction_id or generate new one
+                transaction_id = escrow_roles[chat_id].get('transaction_id')
+                if not transaction_id:
+                    transaction_id = random.randint(90000000, 99999999)
+                    escrow_roles[chat_id]['transaction_id'] = transaction_id
                 
-                # Rename the group
-                await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
-                print(f"✅ Changed group title to: {new_title}")
+                # Get current title to determine group type
+                current_title = chat.title
+                
+                # Only update if the transaction_id is not already in the title
+                if str(transaction_id) not in current_title:
+                    # Determine escrow type based on current title
+                    if "P2P" in current_title:
+                        new_title = f"P2P Escrow By PAGAL Bot ({transaction_id})"
+                    elif "OTC" in current_title:
+                        new_title = f"OTC Escrow By PAGAL Bot ({transaction_id})"
+                    else:
+                        new_title = f"Product Deal Escrow By PAGAL Bot ({transaction_id})"
+                    
+                    # Rename the group
+                    await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
+                    escrow_roles[chat_id]['group_renamed'] = True
+                    print(f"✅ Changed group title to: {new_title}")
         except Exception as e:
             print(f"❌ Failed to change group title: {e}")
     
@@ -2464,17 +2474,38 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Store the escrow address for transaction button
     escrow_roles[chat_id]['escrow_address'] = escrow_address
     
-    # Start monitoring this address for deposits
+    # Query current blockchain balance to use as baseline (to avoid false notifications from historical transactions)
+    baseline_balance = 0
+    try:
+        if network == "BSC":
+            transactions = await check_bsc_transactions(escrow_address)
+            decimals = 18
+        elif network == "TRON":
+            transactions = await check_tron_transactions(escrow_address)
+            decimals = 6
+        else:
+            transactions = []
+            decimals = 18
+        
+        for tx in transactions:
+            baseline_balance += int(tx['value']) / (10 ** decimals)
+        
+        print(f"📊 Baseline balance for {escrow_address}: {baseline_balance} (from {len(transactions)} historical transactions)")
+    except Exception as e:
+        print(f"⚠️ Could not query baseline balance: {e}")
+        baseline_balance = 0
+    
+    # Start monitoring this address for deposits (using baseline to avoid false notifications)
     monitored_addresses[escrow_address] = {
         'chat_id': chat_id,
         'network': network,
         'token': token,
         'network_label': network_label,
-        'total_balance': 0,
+        'total_balance': baseline_balance,  # Start from baseline, not 0
         'last_check': datetime.now()
     }
     
-    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id}")
+    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id} (baseline: {baseline_balance})")
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command to show current escrow balance"""
