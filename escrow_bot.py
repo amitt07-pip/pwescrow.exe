@@ -259,6 +259,14 @@ async def dd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     chat_id = chat.id
     
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Please use this command in a group.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
     # Check if this is a group
     if chat.type in ['group', 'supergroup']:
         try:
@@ -1229,7 +1237,16 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
 async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /buyer command with crypto address"""
     user = update.effective_user
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Check if command has arguments (crypto address)
     if not context.args or len(context.args) == 0:
@@ -1368,7 +1385,16 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /seller command with crypto address"""
     user = update.effective_user
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Check if command has arguments (crypto address)
     if not context.args or len(context.args) == 0:
@@ -1548,7 +1574,16 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /deposit command to generate deposit address"""
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Check if escrow data exists
     if chat_id not in escrow_roles:
@@ -1764,7 +1799,16 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command to show current escrow balance"""
-    chat_id = update.effective_chat.id
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Check if escrow data exists
     if chat_id not in escrow_roles:
@@ -2501,6 +2545,14 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
     # Only works in groups
     if chat.type not in ['group', 'supergroup']:
         await update.message.reply_text(
@@ -2571,6 +2623,14 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /refund command - only buyer in P2P or seller in OTC can refund funds"""
     user = update.effective_user
     chat = update.effective_chat
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Only works in groups
     if chat.type not in ['group', 'supergroup']:
