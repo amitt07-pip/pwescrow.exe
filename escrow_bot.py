@@ -822,7 +822,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             message_text = f"""📍 <b>ESCROW DECLARATION</b>
 
-⚡️ <b>{role_name} {display_info['username']} | Userid: [{display_info['user_id']}]</b>
+⚡️ <b>{role_name}</b> {display_info['username']} | Userid: [{display_info['user_id']}]
 
 ✅<b>{token} CRYPTO</b>
 ✅<b>{network_display}</b>"""
@@ -879,8 +879,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         # Show full escrow declaration with both buyer and seller
         final_message = f"""📍 <b>ESCROW DECLARATION</b>
 
-⚡️ <b>Buyer {buyer_info['username']} | Userid:[{buyer_info['user_id']}]</b>
-⚡️ <b>Seller {seller_info['username']} | Userid: [{seller_info['user_id']}]</b>
+⚡️ <b>Buyer</b> {buyer_info['username']} | Userid: [{buyer_info['user_id']}]
+⚡️ <b>Seller</b> {seller_info['username']} | Userid: [{seller_info['user_id']}]
 
 ✅<b>{token} CRYPTO</b>
 ✅<b>{network_display}</b>"""
