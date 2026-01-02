@@ -65,6 +65,21 @@ fakedepo_pending = {}  # {admin_user_id: target_chat_id}
 release_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': ..., 'seller_id': ..., 'buyer_confirmed': False, 'seller_confirmed': False, ...}}
 refund_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': ..., 'seller_id': ..., 'buyer_confirmed': False, 'seller_confirmed': False, ...}}
 
+# Global blacklist - users who are completely blocked from using the bot
+blacklisted_users = set()  # {user_id, ...}
+
+async def check_blacklist(update: Update) -> bool:
+    """Check if any user in the chat is blacklisted. Returns True if blacklisted user found."""
+    user = update.effective_user
+    if user and user.id in blacklisted_users:
+        await update.message.reply_text(
+            f"<b>A blacklisted user found in the chat</b>\n\n"
+            f"<b>User:</b> <code>{user.id}</code>",
+            parse_mode='HTML'
+        )
+        return True
+    return False
+
 def generate_referral_code(user_id):
     """Generate a unique referral code for a user based on their ID"""
     hash_object = hashlib.sha256(str(user_id).encode())
@@ -2801,8 +2816,8 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         print(f"❌ Failed to generate invite link: {e}")
 
-async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /blacklist and /ban commands - admin only, ban replied user or by username"""
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ban command - admin only, ban replied user or by username from the group"""
     user = update.effective_user
     chat = update.effective_chat
     
@@ -2821,7 +2836,7 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_user_id = None
     target_display_name = None
     
-    # Check if a username was provided as argument (e.g., /blacklist @username)
+    # Check if a username was provided as argument (e.g., /ban @username)
     if context.args and len(context.args) > 0:
         username = context.args[0].strip()
         # Remove @ prefix if present
@@ -2829,9 +2844,7 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = username[1:]
         
         # Try to find the user in recent chat administrators or members
-        # This is a best-effort approach since Bot API doesn't allow username lookup directly
         try:
-            # Try to get chat administrators first
             admins = await context.bot.get_chat_administrators(chat_id=chat.id)
             found = False
             for admin in admins:
@@ -2872,17 +2885,17 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Don't ban other admins
     if target_user_id in ADMIN_IDS:
         await update.message.reply_text(
-            "<b>⚠️ Cannot blacklist other admins.</b>",
+            "<b>⚠️ Cannot ban other admins.</b>",
             parse_mode='HTML'
         )
         return
     
-    # Ban the user
+    # Ban the user from the group
     try:
         await context.bot.ban_chat_member(chat_id=chat.id, user_id=target_user_id)
         
         await update.message.reply_text(
-            f"<b>✅ User {target_display_name} has been blacklisted and banned from this group.</b>",
+            f"<b>✅ User {target_display_name} has been banned from this group.</b>",
             parse_mode='HTML'
         )
     except Exception as e:
@@ -2890,6 +2903,104 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<b>❌ Failed to ban user: {str(e)}</b>",
             parse_mode='HTML'
         )
+
+async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /blacklist command - admin only, globally blacklist a user from using the bot"""
+    user = update.effective_user
+    
+    # Check if user is an admin - silently ignore non-admins
+    if user.id not in ADMIN_IDS:
+        return
+    
+    target_user_id = None
+    target_display_name = None
+    
+    # Check if a username or user ID was provided as argument
+    if context.args and len(context.args) > 0:
+        username = context.args[0].strip()
+        # Remove @ prefix if present
+        if username.startswith('@'):
+            username = username[1:]
+        
+        # Check if it's a numeric user ID
+        if username.isdigit():
+            target_user_id = int(username)
+            target_display_name = f"<code>{target_user_id}</code>"
+        else:
+            # Try to get user from chat administrators if in a group
+            chat = update.effective_chat
+            if chat.type in ['group', 'supergroup']:
+                try:
+                    admins = await context.bot.get_chat_administrators(chat_id=chat.id)
+                    found = False
+                    for admin in admins:
+                        if admin.user.username and admin.user.username.lower() == username.lower():
+                            target_user_id = admin.user.id
+                            target_display_name = f"@{admin.user.username}"
+                            found = True
+                            break
+                    
+                    if not found:
+                        await update.message.reply_text(
+                            f"<b>❌ Could not find user @{username}.</b>\n\n"
+                            "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> or use their numeric user ID.",
+                            parse_mode='HTML'
+                        )
+                        return
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"<b>❌ Failed to lookup user @{username}: {str(e)}</b>\n\n"
+                        "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> or use their numeric user ID.",
+                        parse_mode='HTML'
+                    )
+                    return
+            else:
+                await update.message.reply_text(
+                    f"<b>❌ Cannot lookup username in DMs.</b>\n\n"
+                    "<b>Tip:</b> Use the numeric user ID instead: <code>/blacklist 123456789</code>",
+                    parse_mode='HTML'
+                )
+                return
+    # Check if this is a reply to another message
+    elif update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_display_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+    else:
+        await update.message.reply_text(
+            "<b>⚠️ Usage:</b>\n"
+            "• Reply to a message: <code>/blacklist</code>\n"
+            "• By username: <code>/blacklist @username</code>\n"
+            "• By user ID: <code>/blacklist 123456789</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Don't blacklist other admins
+    if target_user_id in ADMIN_IDS:
+        await update.message.reply_text(
+            "<b>⚠️ Cannot blacklist other admins.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if already blacklisted
+    if target_user_id in blacklisted_users:
+        await update.message.reply_text(
+            f"<b>⚠️ User {target_display_name} is already blacklisted.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Add to blacklist
+    blacklisted_users.add(target_user_id)
+    
+    await update.message.reply_text(
+        f"<b>✅ User {target_display_name} has been globally blacklisted from the bot.</b>\n\n"
+        f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+        "<b>Note:</b> This user can no longer use any bot functions.",
+        parse_mode='HTML'
+    )
 
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /close command - admin only, userbot joins via invite link and permanently deletes the group"""
@@ -3559,8 +3670,8 @@ def main():
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("fakedepo", fakedepo_command))
     app.add_handler(CommandHandler("link", link_command))
+    app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(CommandHandler("blacklist", blacklist_command))
-    app.add_handler(CommandHandler("ban", blacklist_command))
     app.add_handler(CommandHandler("verify", verify_command))
     app.add_handler(CommandHandler("release", release_command))
     app.add_handler(CommandHandler("refund", refund_command))
