@@ -40,6 +40,8 @@ def main():
     app.add_handler(CommandHandler("close", escrow_bot.close_command))
     app.add_handler(CommandHandler("verify", escrow_bot.verify_command))
     app.add_handler(CommandHandler("id", escrow_bot.id_command))
+    app.add_handler(CommandHandler("release", escrow_bot.release_command))
+    app.add_handler(CommandHandler("refund", escrow_bot.refund_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
     app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     
