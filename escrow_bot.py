@@ -2442,38 +2442,69 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(1)
         
         # Userbot joins the group via the invite link
+        target_chat_id = None
         try:
-            await user_client.join_chat(invite_link)
-            print(f"✅ Userbot joined group {chat.id} via invite link")
+            joined_chat = await user_client.join_chat(invite_link)
+            target_chat_id = joined_chat.id
+            print(f"✅ Userbot joined group {chat.id} via invite link, Pyrogram chat ID: {target_chat_id}")
         except Exception as e:
-            print(f"❌ Failed to join group: {e}")
-            await update.message.reply_text(
-                f"<b>❌ Userbot failed to join group: {str(e)}</b>",
-                parse_mode='HTML'
-            )
-            return
+            error_str = str(e)
+            if "USER_ALREADY_PARTICIPANT" in error_str:
+                # Userbot is already in the group, use the invite link to get chat info
+                print(f"ℹ️ Userbot already in group, getting chat info via invite link...")
+                try:
+                    # Extract the invite hash from the link and use it to get chat info
+                    existing_chat = await user_client.get_chat(invite_link)
+                    target_chat_id = existing_chat.id
+                    print(f"✅ Got existing chat ID via invite link: {target_chat_id}")
+                except Exception as e2:
+                    print(f"❌ Failed to get chat info via invite link: {e2}")
+                    # Try using the chat username/id directly if it's a public group
+                    try:
+                        # For supergroups, try without the -100 prefix
+                        chat_id_str = str(chat.id)
+                        if chat_id_str.startswith("-100"):
+                            pyrogram_id = int(chat_id_str)  # Keep as is for Pyrogram
+                        else:
+                            pyrogram_id = chat.id
+                        existing_chat = await user_client.get_chat(pyrogram_id)
+                        target_chat_id = existing_chat.id
+                        print(f"✅ Got existing chat ID directly: {target_chat_id}")
+                    except Exception as e3:
+                        print(f"❌ Failed to get chat info directly: {e3}")
+                        await update.message.reply_text(
+                            f"<b>❌ Failed to get chat info: {str(e2)}</b>",
+                            parse_mode='HTML'
+                        )
+                        return
+            else:
+                print(f"❌ Failed to join group: {e}")
+                await update.message.reply_text(
+                    f"<b>❌ Userbot failed to join group: {str(e)}</b>",
+                    parse_mode='HTML'
+                )
+                return
         
         await asyncio.sleep(1)
         
-        # Get the chat ID in Pyrogram format (without -100 prefix for supergroups)
-        chat_id_pyrogram = int(str(chat.id).replace("-100", ""))
-        
         # Permanently delete the group for all members
+        # Use the chat ID from join_chat() directly - don't convert it
         try:
-            await user_client.delete_supergroup(chat_id_pyrogram)
+            await user_client.delete_supergroup(target_chat_id)
             print(f"✅ Permanently deleted group {chat.id}")
         except Exception as e:
-            print(f"❌ Failed to delete group: {e}")
+            print(f"❌ Failed to delete group with delete_supergroup: {e}")
             # Try alternative method - delete_chat
             try:
-                await user_client.delete_chat(chat_id_pyrogram)
+                await user_client.delete_chat(target_chat_id)
                 print(f"✅ Permanently deleted group {chat.id} using delete_chat")
             except Exception as e2:
                 print(f"❌ Failed to delete group with delete_chat: {e2}")
                 try:
                     await update.message.reply_text(
                         f"<b>❌ Failed to delete group: {str(e)}</b>\n\n"
-                        "<b>Note:</b> The userbot may not have permission to delete this group.",
+                        "<b>Note:</b> The userbot may not have permission to delete this group. "
+                        "Only the group creator can delete a supergroup.",
                         parse_mode='HTML'
                     )
                 except:
