@@ -952,11 +952,11 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         transaction_message = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
 
 ⚡️ <b>SELLER</b>
-<b>{seller_info['username']} | [{seller_info['user_id']}]</b>
+{seller_info['username']} | [{seller_info['user_id']}]
 {seller_info['address']} <b>[{token}] [{network}]</b>
 
 ⚡️ <b>BUYER</b>
-<b>{buyer_info['username']} | [{buyer_info['user_id']}]</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
 {buyer_info['address']} <b>[{token}] [{network}]</b>
 
 ⏰ <b>Trade Start Time: {trade_start_time}</b>
@@ -1155,9 +1155,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         deposit_message = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
 
 ⚡️ <b>SELLER</b>
-<b>{seller_info['username']} | [{seller_info['user_id']}]</b>
+{seller_info['username']} | [{seller_info['user_id']}]
 ⚡️ <b>BUYER</b>
-<b>{buyer_info['username']} | [{buyer_info['user_id']}]</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
 🟢 <b>ESCROW ADDRESS</b>
 <code>{escrow_address}</code> <b>[{token}] [{network_label}]</b>
 
@@ -1170,8 +1170,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
 
 📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
 <b>Useful commands:</b>
-🗒 <b>/release = {release_msg}</b>
-🗒 <b>/refund = {refund_msg}</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
 
 <b>Remember, once commands are used payment will be released, there is no revert!</b>"""
         
@@ -1692,9 +1692,9 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deposit_message = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
 
 ⚡️ <b>SELLER</b>
-<b>{seller_info['username']} | [{seller_info['user_id']}]</b>
+{seller_info['username']} | [{seller_info['user_id']}]
 ⚡️ <b>BUYER</b>
-<b>{buyer_info['username']} | [{buyer_info['user_id']}]</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
 🟢 <b>ESCROW ADDRESS</b>
 <code>{escrow_address}</code> <b>[{token}] [{network_label}]</b>
 
@@ -1707,8 +1707,8 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
 <b>Useful commands:</b>
-🗒 <b>/release = {release_msg}</b>
-🗒 <b>/refund = {refund_msg}</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
 
 <b>Remember, once commands are used payment will be released, there is no revert!</b>"""
     
