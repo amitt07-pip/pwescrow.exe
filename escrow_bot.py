@@ -1783,8 +1783,8 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Total balance is monitored + manual
     current_balance = monitored_balance + manual_balance
     
-    # Format message: everything bold except amount (monospace) and USD value (bold+underline)
-    balance_message = f"<b>Current Escrow Balance is: <code>{current_balance:.5f}</code>usdt <u>{current_balance:.2f}$</u></b>"
+    # Format message: everything bold except amount (monospace) and USD value (bold in brackets)
+    balance_message = f"<b>Current Escrow Balance is:</b> <code>{current_balance:.5f}</code>usdt <b>[{current_balance:.2f}$]</b>"
     
     await update.message.reply_text(balance_message, parse_mode='HTML')
 
