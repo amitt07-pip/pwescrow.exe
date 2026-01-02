@@ -486,9 +486,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 description=""
             )
             
-            # Small delay to ensure group is fully created
-            await asyncio.sleep(2)
-            
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
             await user_client.add_chat_members(supergroup.id, bot_username)
@@ -500,9 +497,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
-            
-            # Small delay before promoting
-            await asyncio.sleep(1)
             
             # Promote bot to admin with full permissions
             await user_client.promote_chat_member(
@@ -533,12 +527,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     is_anonymous=True
                 )
             )
-            
-            # Small delay for promotion to take effect
-            await asyncio.sleep(1)
-            
-            # Wait for bot admin permissions to propagate
-            await asyncio.sleep(2)
             
             # Create invite link using Pyrogram (user client has immediate access)
             invite_link_obj = await user_client.create_chat_invite_link(
@@ -573,9 +561,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # Small delay before leaving
-            await asyncio.sleep(1)
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
@@ -631,9 +616,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 description=""
             )
             
-            # Small delay to ensure group is fully created
-            await asyncio.sleep(2)
-            
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
             await user_client.add_chat_members(supergroup.id, bot_username)
@@ -645,9 +627,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
-            
-            # Small delay before promoting
-            await asyncio.sleep(1)
             
             # Promote bot to admin with full permissions
             await user_client.promote_chat_member(
@@ -678,12 +657,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     is_anonymous=True
                 )
             )
-            
-            # Small delay for promotion to take effect
-            await asyncio.sleep(1)
-            
-            # Wait for bot admin permissions to propagate
-            await asyncio.sleep(2)
             
             # Create invite link using Pyrogram (user client has immediate access)
             invite_link_obj = await user_client.create_chat_invite_link(
@@ -718,9 +691,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # Small delay before leaving
-            await asyncio.sleep(1)
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
