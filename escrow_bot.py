@@ -28,7 +28,7 @@ API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 PHONE = os.getenv("TELEGRAM_PHONE", "")
 
 # Admin user IDs (comma-separated)
-ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098, 7422906767, 7962772947 ")
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098,7422906767,7962772947,7338429782,8004116104,7715451354,8034627772,5208040247")
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip()]
 
 # Blockchain API keys
@@ -1073,7 +1073,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             network_label = "TRC20"
         elif query.data == "fakedepo_bep20":
             network = "BSC"
-            fake_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
+            fake_address = "0x4DE23f3f0Fb3318287378AdbdE030cf61714b2f3"
             network_label = "BEP20"
         elif query.data == "fakedepo_bsc_suraj":
             network = "BSC"
@@ -1814,7 +1814,7 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
         )
         try:
-            with open('attached_assets/canvas_1762800859705.png', 'rb') as photo:
+            with open('photo_6316666496414845910_y.jpg', 'rb') as photo:
                 await update.message.reply_photo(
                     photo=photo,
                     caption=caption,
@@ -1935,7 +1935,7 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
         )
         try:
-            with open('attached_assets/canvas_1762800844102.png', 'rb') as photo:
+            with open('photo_6314481552062090385_y.jpg', 'rb') as photo:
                 await update.message.reply_photo(
                     photo=photo,
                     caption=caption,
@@ -3000,9 +3000,19 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Add to blacklist
     blacklisted_users.add(target_user_id)
     
+    # Also ban from group if command is used in a group
+    chat = update.effective_chat
+    group_ban_status = ""
+    if chat.type in ['group', 'supergroup']:
+        try:
+            await context.bot.ban_chat_member(chat_id=chat.id, user_id=target_user_id)
+            group_ban_status = "\n<b>Group Ban:</b> ✅ Banned from this group"
+        except Exception as e:
+            group_ban_status = f"\n<b>Group Ban:</b> ❌ Failed ({str(e)[:50]})"
+    
     await update.message.reply_text(
         f"<b>✅ User {target_display_name} has been globally blacklisted from the bot.</b>\n\n"
-        f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+        f"<b>User ID:</b> <code>{target_user_id}</code>{group_ban_status}\n\n"
         "<b>Note:</b> This user can no longer use any bot functions.",
         parse_mode='HTML'
     )
