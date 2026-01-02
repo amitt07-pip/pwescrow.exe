@@ -2406,8 +2406,8 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
-async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /leave command - admin only, transfer ownership to admin and leave group"""
+async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /close command - admin only, userbot joins via invite link and permanently deletes the group"""
     user = update.effective_user
     chat = update.effective_chat
     
@@ -2427,34 +2427,86 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(
-            "<b>🔄 Transferring group ownership to you and leaving...</b>",
+            "<b>🔄 Closing group... The userbot will join and delete this group permanently.</b>",
             parse_mode='HTML'
         )
         
+        # Check if user_client is available
+        if not user_client:
+            await update.message.reply_text(
+                "<b>❌ Userbot is not configured. Cannot delete group.</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Start user_client if not connected
+        if not user_client.is_connected:
+            await user_client.start()
+        
+        # Generate an invite link for the userbot to join
+        try:
+            chat_invite = await context.bot.create_chat_invite_link(
+                chat_id=chat.id,
+                member_limit=1  # Only one use - for the userbot
+            )
+            invite_link = chat_invite.invite_link
+            print(f"✅ Generated invite link for userbot: {invite_link}")
+        except Exception as e:
+            print(f"❌ Failed to create invite link: {e}")
+            await update.message.reply_text(
+                f"<b>❌ Failed to create invite link: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
         await asyncio.sleep(1)
         
-        if user_client and user_client.is_connected:
-            chat_id_pyrogram = int(str(chat.id).replace("-100", ""))
-            
-            # Transfer ownership to the requesting admin
-            await user_client.set_chat_owner(chat_id_pyrogram, user.id)
-            print(f"✅ Transferred ownership of {chat.id} to admin {user.id}")
-            
-            await asyncio.sleep(0.5)
-            
-            # Bot leaves the group
-            await context.bot.leave_chat(chat_id=chat.id)
-            print(f"✅ Bot left group {chat.id}")
-        else:
-            # Fallback: just leave if user_client not available
-            await context.bot.leave_chat(chat_id=chat.id)
-            print(f"✅ Admin {user.id} made bot leave group {chat.id}")
+        # Userbot joins the group via the invite link
+        try:
+            await user_client.join_chat(invite_link)
+            print(f"✅ Userbot joined group {chat.id} via invite link")
+        except Exception as e:
+            print(f"❌ Failed to join group: {e}")
+            await update.message.reply_text(
+                f"<b>❌ Userbot failed to join group: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        await asyncio.sleep(1)
+        
+        # Get the chat ID in Pyrogram format (without -100 prefix for supergroups)
+        chat_id_pyrogram = int(str(chat.id).replace("-100", ""))
+        
+        # Permanently delete the group for all members
+        try:
+            await user_client.delete_supergroup(chat_id_pyrogram)
+            print(f"✅ Permanently deleted group {chat.id}")
+        except Exception as e:
+            print(f"❌ Failed to delete group: {e}")
+            # Try alternative method - delete_chat
+            try:
+                await user_client.delete_chat(chat_id_pyrogram)
+                print(f"✅ Permanently deleted group {chat.id} using delete_chat")
+            except Exception as e2:
+                print(f"❌ Failed to delete group with delete_chat: {e2}")
+                try:
+                    await update.message.reply_text(
+                        f"<b>❌ Failed to delete group: {str(e)}</b>\n\n"
+                        "<b>Note:</b> The userbot may not have permission to delete this group.",
+                        parse_mode='HTML'
+                    )
+                except:
+                    pass
+                return
+        
+        print(f"✅ Admin {user.id} closed and deleted group {chat.id}")
+        
     except Exception as e:
-        print(f"❌ Failed to transfer ownership/leave group {chat.id}: {e}")
+        print(f"❌ Failed to close group {chat.id}: {e}")
         try:
             await update.message.reply_text(
-                f"<b>❌ Failed to transfer ownership: {str(e)}</b>\n\n"
-                "<b>Note:</b> The bot may not have permission to transfer ownership.",
+                f"<b>❌ Failed to close group: {str(e)}</b>",
                 parse_mode='HTML'
             )
         except:
@@ -2722,7 +2774,7 @@ def main():
     app.add_handler(CommandHandler("verify", verify_command))
     app.add_handler(CommandHandler("release", release_command))
     app.add_handler(CommandHandler("refund", refund_command))
-    app.add_handler(CommandHandler("leave", leave_command))
+    app.add_handler(CommandHandler("close", close_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     

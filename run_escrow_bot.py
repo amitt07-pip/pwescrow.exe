@@ -37,7 +37,7 @@ def main():
     app.add_handler(CommandHandler("fakedepo", escrow_bot.fakedepo_command))
     app.add_handler(CommandHandler("link", escrow_bot.link_command))
     app.add_handler(CommandHandler("blacklist", escrow_bot.blacklist_command))
-    app.add_handler(CommandHandler("leave", escrow_bot.leave_command))
+    app.add_handler(CommandHandler("close", escrow_bot.close_command))
     app.add_handler(CommandHandler("verify", escrow_bot.verify_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
     app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
