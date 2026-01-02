@@ -3145,10 +3145,16 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         release_amount = amount
         amount_for_calc = 0
     
+    # Check if both users have bot in bio for 0.5% fee
+    buyer_has_bio = buyer_info.get('has_bot_in_bio', False)
+    seller_has_bio = seller_info.get('has_bot_in_bio', False)
+    both_have_bio = buyer_has_bio and seller_has_bio
+    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+    
     # Format amounts with $ symbol and proper decimals
     if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
         network_fee = 0.10
-        escrow_fee = amount_for_calc * 0.01
+        escrow_fee = amount_for_calc * escrow_fee_percent
         ambassador_discount = 0.0
         ticket_discount = 0.0
         formatted_amount = f"{amount_for_calc:.5f}"
@@ -3346,10 +3352,16 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         refund_amount = amount
         amount_for_calc = 0
     
+    # Check if both users have bot in bio for 0.5% fee
+    buyer_has_bio = buyer_info.get('has_bot_in_bio', False)
+    seller_has_bio = seller_info.get('has_bot_in_bio', False)
+    both_have_bio = buyer_has_bio and seller_has_bio
+    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+    
     # Format amounts
     if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
         network_fee = 0.10
-        escrow_fee = amount_for_calc * 0.01
+        escrow_fee = amount_for_calc * escrow_fee_percent
         ambassador_discount = 0.0
         ticket_discount = 0.0
         formatted_amount = f"{amount_for_calc:.5f}"
