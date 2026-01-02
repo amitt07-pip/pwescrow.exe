@@ -267,6 +267,31 @@ async def dd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Rename the group with a random 8-digit number
+    if chat.type in ['group', 'supergroup']:
+        try:
+            # Generate random 8-digit number starting with 9
+            random_number = random.randint(90000000, 99999999)
+            
+            # Get current title to determine group type
+            current_title = chat.title
+            
+            # Only update if the title doesn't already have a number in parentheses
+            if "(" not in current_title:
+                # Determine escrow type based on current title
+                if "P2P" in current_title:
+                    new_title = f"P2P Escrow By PAGAL Bot ({random_number})"
+                elif "OTC" in current_title:
+                    new_title = f"OTC Escrow By PAGAL Bot ({random_number})"
+                else:
+                    new_title = f"Product Deal Escrow By PAGAL Bot ({random_number})"
+                
+                # Rename the group
+                await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
+                print(f"✅ Changed group title to: {new_title}")
+        except Exception as e:
+            print(f"❌ Failed to change group title: {e}")
+    
     # Check if this is an OTC group
     is_otc_group = "OTC" in chat.title if chat.title else False
     
@@ -1314,33 +1339,6 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'has_bot_in_bio': has_bot_in_bio
     }
     
-    # Rename group with transaction ID (8-digit number) if not already renamed
-    try:
-        if not escrow_roles[chat_id].get('group_renamed', False):
-            # Get transaction ID (from group creation)
-            transaction_id = escrow_roles[chat_id].get('transaction_id')
-            if transaction_id:
-                # Get current group info
-                chat = await context.bot.get_chat(chat_id)
-                current_title = chat.title
-                
-                # Only rename if transaction ID is not already in the title
-                if str(transaction_id) not in current_title:
-                    # Determine escrow type based on current title
-                    if "P2P" in current_title:
-                        new_title = f"P2P Escrow By PAGAL Bot ({transaction_id})"
-                    elif "OTC" in current_title:
-                        new_title = f"OTC Escrow By PAGAL Bot ({transaction_id})"
-                    else:
-                        new_title = f"Product Deal Escrow By PAGAL Bot ({transaction_id})"
-                    
-                    # Rename the group
-                    await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
-                    escrow_roles[chat_id]['group_renamed'] = True
-                    print(f"✅ Group renamed to: {new_title}")
-    except Exception as e:
-        print(f"Error renaming group in /buyer: {e}")
-    
     # Only prompt if buyer was NOT already set before
     if not buyer_already_set:
         # Check if seller is already set
@@ -1461,33 +1459,6 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'address': crypto_address,
         'has_bot_in_bio': has_bot_in_bio
     }
-    
-    # Rename group with transaction ID (8-digit number) if not already renamed
-    try:
-        if not escrow_roles[chat_id].get('group_renamed', False):
-            # Get transaction ID (from group creation)
-            transaction_id = escrow_roles[chat_id].get('transaction_id')
-            if transaction_id:
-                # Get current group info
-                chat = await context.bot.get_chat(chat_id)
-                current_title = chat.title
-                
-                # Only rename if transaction ID is not already in the title
-                if str(transaction_id) not in current_title:
-                    # Determine escrow type based on current title
-                    if "P2P" in current_title:
-                        new_title = f"P2P Escrow By PAGAL Bot ({transaction_id})"
-                    elif "OTC" in current_title:
-                        new_title = f"OTC Escrow By PAGAL Bot ({transaction_id})"
-                    else:
-                        new_title = f"Product Deal Escrow By PAGAL Bot ({transaction_id})"
-                    
-                    # Rename the group
-                    await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
-                    escrow_roles[chat_id]['group_renamed'] = True
-                    print(f"✅ Group renamed to: {new_title}")
-    except Exception as e:
-        print(f"Error renaming group in /seller: {e}")
     
     # Only prompt if seller was NOT already set before
     if not seller_already_set:
