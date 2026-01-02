@@ -267,31 +267,6 @@ async def dd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Check if this is a group
-    if chat.type in ['group', 'supergroup']:
-        try:
-            # Generate random 8-digit number starting with 9
-            random_number = random.randint(90000000, 99999999)
-            
-            # Get current title to determine group type
-            current_title = chat.title
-            
-            # Only update if the title doesn't already have a number in parentheses
-            if "(" not in current_title:
-                # Determine escrow type based on current title
-                if "P2P" in current_title:
-                    new_title = f"P2P Escrow By PAGAL Bot ({random_number})"
-                elif "OTC" in current_title:
-                    new_title = f"OTC Escrow By PAGAL Bot ({random_number})"
-                else:
-                    new_title = f"Product Deal Escrow By PAGAL Bot ({random_number})"
-                
-                # Rename the group
-                await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
-                print(f"✅ Changed group title to: {new_title}")
-        except Exception as e:
-            print(f"❌ Failed to change group title: {e}")
-    
     # Check if this is an OTC group
     is_otc_group = "OTC" in chat.title if chat.title else False
     
