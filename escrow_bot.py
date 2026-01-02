@@ -492,8 +492,13 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Store the group number as the transaction ID for this chat
             # Convert supergroup.id to the actual chat_id format used by bot
-            # Pyrogram returns negative IDs, so we use abs() to get the positive part
-            bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            # Pyrogram may return IDs in different formats, so handle both cases
+            supergroup_id_str = str(supergroup.id)
+            if supergroup_id_str.startswith("-100"):
+                bot_chat_id = supergroup.id
+            else:
+                bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            print(f"DEBUG P2P: supergroup.id={supergroup.id}, bot_chat_id={bot_chat_id}")
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
@@ -622,8 +627,13 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Store the group number as the transaction ID for this chat
             # Convert supergroup.id to the actual chat_id format used by bot
-            # Pyrogram returns negative IDs, so we use abs() to get the positive part
-            bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            # Pyrogram may return IDs in different formats, so handle both cases
+            supergroup_id_str = str(supergroup.id)
+            if supergroup_id_str.startswith("-100"):
+                bot_chat_id = supergroup.id
+            else:
+                bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            print(f"DEBUG OTC: supergroup.id={supergroup.id}, bot_chat_id={bot_chat_id}")
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
@@ -2667,6 +2677,14 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /id command - shows the chat ID"""
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"Chat id : <code>{chat.id}</code>",
+        parse_mode='HTML'
+    )
+
 async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Track when members join and auto-promote admins"""
     result = update.chat_member
@@ -2745,6 +2763,7 @@ def main():
     app.add_handler(CommandHandler("release", release_command))
     app.add_handler(CommandHandler("refund", refund_command))
     app.add_handler(CommandHandler("close", close_command))
+    app.add_handler(CommandHandler("id", id_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     
