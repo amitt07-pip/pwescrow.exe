@@ -1803,12 +1803,8 @@ async def addbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     chat_id = update.effective_chat.id
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if escrow data exists
@@ -2032,13 +2028,9 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /add command - admin only, manually confirm deposit"""
     user = update.effective_user
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     print(f"🔍 /add command: User {user.id} ({user.username or user.first_name}) - Admin check: {user.id in ADMIN_IDS}")
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if command is used in DM
@@ -2162,12 +2154,8 @@ async def fakedepo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /fakedepo command - admin only, set specific deposit address for testing"""
     user = update.effective_user
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if command is used in DM
@@ -2289,12 +2277,8 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if command is used in a group
@@ -2383,11 +2367,8 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
+    # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     if chat.type not in ['group', 'supergroup']:
