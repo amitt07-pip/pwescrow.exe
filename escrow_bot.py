@@ -907,11 +907,11 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         
         # Set release/refund messages based on group type
         if is_otc_group:
-            release_msg = "Will Release The Funds To Seller."
-            refund_msg = "Will Refund The Funds To Buyer."
+            release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
         else:
-            release_msg = "Will Release The Funds To Buyer."
-            refund_msg = "Will Refund The Funds To Seller."
+            release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
         
         # First, update group photo with buyer and seller usernames
         try:
@@ -1145,11 +1145,11 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         
         # Set release/refund messages based on group type
         if is_otc_group:
-            release_msg = "Will Release The Funds To Seller."
-            refund_msg = "Will Refund The Funds To Buyer."
+            release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
         else:
-            release_msg = "Will Release The Funds To Buyer."
-            refund_msg = "Will Refund The Funds To Seller."
+            release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
         
         # Recreate the deposit message with updated balance
         deposit_message = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
@@ -1163,7 +1163,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
 
 {payment_instruction}
 
-<b>Amount Recieved: {current_balance:.5f} [{current_balance:.2f}$]</b>
+Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}$]</u></b>
 
 ⏰ <b>Trade Start Time: {trade_start_time}</b>
 ⏰ <b>Address Reset In: {remaining_time:.2f} Min</b>
@@ -1678,11 +1678,11 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Set release/refund messages based on group type
     if is_otc_group:
-        release_msg = "Will Release The Funds To Seller."
-        refund_msg = "Will Refund The Funds To Buyer."
+        release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+        refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
     else:
-        release_msg = "Will Release The Funds To Buyer."
-        refund_msg = "Will Refund The Funds To Seller."
+        release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+        refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
     
     # Check for existing balance (manual balance added by admin)
     manual_balance = escrow_roles[chat_id].get('balance', 0)
@@ -1700,7 +1700,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 {payment_instruction}
 
-<b>Amount Recieved: {initial_balance:.5f} [{initial_balance:.2f}$]</b>
+Amount Recieved: <code>{initial_balance:.5f}</code> <b><u>[{initial_balance:.2f}$]</u></b>
 
 ⏰ <b>Trade Start Time: {trade_start_time}</b>
 ⏰ <b>Address Reset In: 20.00 Min</b>
@@ -1948,11 +1948,11 @@ async def monitor_deposits(bot_app):
                     
                     # Set release/refund messages based on group type
                     if is_otc_group:
-                        release_msg = "Will Release The Funds To Seller."
-                        refund_msg = "Will Refund The Funds To Buyer."
+                        release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+                        refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
                     else:
-                        release_msg = "Will Release The Funds To Buyer."
-                        refund_msg = "Will Refund The Funds To Seller."
+                        release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+                        refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
                     
                     # Get the most recent transaction hash
                     tx_hash = None
