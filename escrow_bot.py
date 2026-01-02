@@ -528,14 +528,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await user_client.create_chat_invite_link(
-                chat_id=supergroup.id,
-                member_limit=2
-            )
-            invite_link = invite_link_obj.invite_link
-            print(f"✅ P2P Invite link created successfully: {invite_link}")
-            
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
 ✅ Please start with /dd command and fill the DealInfo Form"""
@@ -564,6 +556,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
+            
+            # Create invite link using the bot (after all userbot work is done)
+            invite_link_obj = await context.bot.create_chat_invite_link(
+                chat_id=bot_chat_id,
+                member_limit=2
+            )
+            invite_link = invite_link_obj.invite_link
+            print(f"✅ P2P Invite link created successfully: {invite_link}")
             
             # Get user's full name
             user_full_name = user.first_name
@@ -658,14 +658,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await user_client.create_chat_invite_link(
-                chat_id=supergroup.id,
-                member_limit=2
-            )
-            invite_link = invite_link_obj.invite_link
-            print(f"✅ Product Invite link created successfully: {invite_link}")
-            
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
 ✅ Please start with /dd command and fill the DealInfo Form"""
@@ -694,6 +686,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
+            
+            # Create invite link using the bot (after all userbot work is done)
+            invite_link_obj = await context.bot.create_chat_invite_link(
+                chat_id=bot_chat_id,
+                member_limit=2
+            )
+            invite_link = invite_link_obj.invite_link
+            print(f"✅ Product Invite link created successfully: {invite_link}")
             
             # Get user's full name
             user_full_name = user.first_name
