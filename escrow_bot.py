@@ -461,7 +461,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
     
     elif query.data == "escrow_p2p":
         await query.answer()
-        await query.edit_message_text("**Creating a safe trading place for you please wait, please wait...**", parse_mode='Markdown')
+        await query.edit_message_text("<b>Creating a safe trading place for you please wait, please wait...</b>", parse_mode='HTML')
         
         if not user_client:
             error_msg = "❌ Group creation is not configured. Please contact the bot administrator."
@@ -596,7 +596,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
     
     elif query.data == "escrow_product":
         await query.answer()
-        await query.edit_message_text("**Creating a safe trading place for you please wait, please wait...**", parse_mode='Markdown')
+        await query.edit_message_text("<b>Creating a safe trading place for you please wait, please wait...</b>", parse_mode='HTML')
         
         if not user_client:
             error_msg = "❌ Group creation is not configured. Please contact the bot administrator."
