@@ -1964,17 +1964,17 @@ async def monitor_deposits(bot_app):
                             tx_hash = latest_tx.get('transaction_id')
                     
                     # Send deposit confirmation message
-                    confirmation_message = f"""<b>Deposit 💵 has been confirmed
+                    confirmation_message = f"""<b>Deposit 💵 has been confirmed</b>
 
-🪙 Token: {token_name}
-💰 Amount: {new_amount:.5f}[{new_amount:.2f}$]
-💸 Balance: {total_received:.5f}[{total_received:.2f}$]
+🪙 <b>Token:</b> {token_name}
+💰 <b>Amount:</b> {new_amount:.5f}[{new_amount:.2f}$]
+💸 <b>Balance:</b> {total_received:.5f}[{total_received:.2f}$]
 
-Now you can proceed with the Deal✅
+<b>Now you can proceed with the Deal✅
 
-Useful commands:
+Useful commands:</b>
 🗒 <code>/release</code> = {release_msg}
-🗒 <code>/refund</code> = {refund_msg}</b>"""
+🗒 <code>/refund</code> = {refund_msg}"""
                     
                     # Create transaction button with hash link (if available)
                     explorer_url = None
@@ -2083,17 +2083,17 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
     
     # Send confirmation message to the group
-    confirmation_message = f"""<b><u>Deposit 💵 has been confirmed</u>
+    confirmation_message = f"""<b>Deposit 💵 has been confirmed</b>
 
 🪙 <b>Token:</b> {token_info}
 💰 <b>Amount:</b> {amount:.5f}[{amount:.2f}$]
 💸 <b>Balance:</b> {new_balance:.5f}[{new_balance:.2f}$]
 
-Now you can proceed with the Deal✅
+<b>Now you can proceed with the Deal✅
 
-<b>Useful commands:</b>
+Useful commands:</b>
 🗒 <code>/release</code> = {release_msg}
-🗒 <code>/refund</code> = {refund_msg}</b>"""
+🗒 <code>/refund</code> = {refund_msg}"""
     
     # Create transaction button if escrow address is available
     reply_markup = None
