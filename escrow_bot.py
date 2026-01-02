@@ -1316,13 +1316,12 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as pyro_error:
             print(f"Pyrogram bio check failed for user {user_id}: {pyro_error}")
     
-    # Format the message
+    # Format the message (wallet address hidden in immediate response, shown in other messages)
     response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
 
 ⚡️ <b>BUYER {username} | Userid: [{user_id}]</b>
 
 ✅ <b>BUYER WALLET</b>
-<code>{crypto_address}</code>
 
 <i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
     
@@ -1437,13 +1436,12 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as pyro_error:
             print(f"Pyrogram bio check failed for user {user_id}: {pyro_error}")
     
-    # Format the message
+    # Format the message (wallet address hidden in immediate response, shown in other messages)
     response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
 
 ⚡️ <b>SELLER {username} | Userid: [{user_id}]</b>
 
 ✅ <b>SELLER WALLET</b>
-<code>{crypto_address}</code>
 
 <i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
     
