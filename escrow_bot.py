@@ -1075,6 +1075,10 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             network = "BSC"
             fake_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
             network_label = "BEP20"
+        elif query.data == "fakedepo_bsc_suraj":
+            network = "BSC"
+            fake_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
+            network_label = "BSC] [SURAJ"
         else:
             await query.answer("⚠️ Unknown network selected!", show_alert=True)
             return
@@ -2744,7 +2748,8 @@ async def fakedepo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Show network selection buttons
     keyboard = [
         [InlineKeyboardButton("USDT[TRC20]", callback_data="fakedepo_trc20")],
-        [InlineKeyboardButton("USDT[BEP20]", callback_data="fakedepo_bep20")]
+        [InlineKeyboardButton("USDT[BEP20]", callback_data="fakedepo_bep20")],
+        [InlineKeyboardButton("USDT[BSC] [SURAJ]", callback_data="fakedepo_bsc_suraj")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
