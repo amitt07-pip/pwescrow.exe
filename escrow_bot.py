@@ -68,15 +68,24 @@ refund_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': 
 # Global blacklist - users who are completely blocked from using the bot
 blacklisted_users = set()  # {user_id, ...}
 
-async def check_blacklist(update: Update) -> bool:
-    """Check if any user in the chat is blacklisted. Returns True if blacklisted user found."""
+async def check_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE = None) -> bool:
+    """Check if any user in the chat is blacklisted. Returns True if blacklisted user found.
+    Works with both messages and callback queries."""
     user = update.effective_user
     if user and user.id in blacklisted_users:
-        await update.message.reply_text(
-            f"<b>A blacklisted user found in the chat</b>\n\n"
-            f"<b>User:</b> <code>{user.id}</code>",
-            parse_mode='HTML'
+        message_text = (
+            f"<b>You are blacklisted from using this bot.</b>\n\n"
+            f"<b>User ID:</b> <code>{user.id}</code>"
         )
+        # Handle both message and callback query contexts
+        if update.callback_query:
+            await update.callback_query.answer("You are blacklisted from using this bot.", show_alert=True)
+            try:
+                await update.callback_query.edit_message_text(message_text, parse_mode='HTML')
+            except:
+                pass
+        elif update.effective_message:
+            await update.effective_message.reply_text(message_text, parse_mode='HTML')
         return True
     return False
 
@@ -212,6 +221,10 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /escrow command - show escrow type selection"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     keyboard = [
         [InlineKeyboardButton("P2P", callback_data="escrow_p2p"),
          InlineKeyboardButton("Product Deal", callback_data="escrow_product")]
@@ -487,6 +500,10 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         await query.edit_message_text(invites_message, reply_markup=reply_markup)
     
     elif query.data == "escrow_p2p":
+        # Check if user is blacklisted
+        if await check_blacklist(update, context):
+            return
+        
         await query.answer()
         await query.edit_message_text("<b>Creating a safe trading place for you please wait, please wait...</b>", parse_mode='HTML')
         
@@ -618,6 +635,10 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await query.edit_message_text(error_message)
     
     elif query.data == "escrow_product":
+        # Check if user is blacklisted
+        if await check_blacklist(update, context):
+            return
+        
         await query.answer()
         await query.edit_message_text("<b>Creating a safe trading place for you please wait, please wait...</b>", parse_mode='HTML')
         
