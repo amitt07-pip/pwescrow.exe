@@ -68,6 +68,35 @@ refund_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': 
 # Global blacklist - users who are completely blocked from using the bot
 blacklisted_users = set()  # {user_id, ...}
 
+# Blacklist file path (relative to script directory)
+BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blacklist.json")
+
+def load_blacklist():
+    """Load blacklisted users from file on startup."""
+    global blacklisted_users
+    try:
+        if os.path.exists(BLACKLIST_FILE):
+            with open(BLACKLIST_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    blacklisted_users = set(data)
+                    print(f"✅ Loaded {len(blacklisted_users)} blacklisted users from file")
+                else:
+                    print("⚠️ Blacklist file has invalid format, starting with empty blacklist")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load blacklist file: {e}, starting with empty blacklist")
+
+def save_blacklist():
+    """Save blacklisted users to file."""
+    try:
+        # Write to temp file first, then rename for atomic write
+        temp_file = BLACKLIST_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump(list(blacklisted_users), f)
+        os.replace(temp_file, BLACKLIST_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save blacklist file: {e}")
+
 async def check_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE = None) -> bool:
     """Check if any user in the chat is blacklisted. Returns True if blacklisted user found.
     Works with both messages and callback queries."""
@@ -3018,8 +3047,9 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Add to blacklist
+    # Add to blacklist and save to file
     blacklisted_users.add(target_user_id)
+    save_blacklist()
     
     # Also ban from group if command is used in a group
     chat = update.effective_chat
@@ -3668,6 +3698,9 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 print(f"Failed to promote admin {user_id}: {e}")
 
 def main():
+    # Load blacklist from file on startup
+    load_blacklist()
+    
     if not BOT_TOKEN:
         print("❌ Error: ESCROW_BOT_TOKEN environment variable not set!")
         print("Please set your Telegram bot token in Secrets.")
