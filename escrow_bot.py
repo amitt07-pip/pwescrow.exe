@@ -233,19 +233,20 @@ def generate_group_photo(buyer_username, seller_username):
         buyer_username = buyer_username.strip().lstrip('@')
         seller_username = seller_username.strip().lstrip('@')
         
-        # Try to use fonts that match the template style (bold geometric sans)
+        # Try to use fonts that match the template style (clean sans-serif like in reference image)
         try:
             font = None
             font_paths = [
-                "/nix/store/59p03gp3vzbrhd7xjiw3npgbdd68x3y0-dejavu-fonts-2.37/share/fonts/truetype/DejaVuSansCondensed-Bold.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/nix/store/59p03gp3vzbrhd7xjiw3npgbdd68x3y0-dejavu-fonts-2.37/share/fonts/truetype/DejaVuSans-Bold.ttf",
             ]
             
             for font_path in font_paths:
                 try:
-                    # Font size for 800×790 template
-                    font = ImageFont.truetype(font_path, 48)
+                    # Font size for 800×790 template - slightly larger for better visibility
+                    font = ImageFont.truetype(font_path, 52)
                     break
                 except:
                     continue

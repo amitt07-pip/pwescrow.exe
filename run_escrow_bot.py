@@ -20,6 +20,11 @@ def main():
     import escrow_bot
     from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ChatMemberHandler
     
+    # Load persistent data on startup
+    escrow_bot.load_blacklist()
+    escrow_bot.load_global_fee()
+    escrow_bot.load_saved_addresses()
+    
     app = ApplicationBuilder().token(escrow_token).build()
     
     app.add_handler(CommandHandler("start", escrow_bot.start_command))
@@ -43,6 +48,8 @@ def main():
     app.add_handler(CommandHandler("id", escrow_bot.id_command))
     app.add_handler(CommandHandler("release", escrow_bot.release_command))
     app.add_handler(CommandHandler("refund", escrow_bot.refund_command))
+    app.add_handler(CommandHandler("globalfee", escrow_bot.globalfee_command))
+    app.add_handler(CommandHandler("save", escrow_bot.save_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
     app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     
