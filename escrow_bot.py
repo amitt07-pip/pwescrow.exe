@@ -78,7 +78,7 @@ saved_addresses = {}
 save_pending = {}
 
 # CEO and OWNER IDs for restricted commands
-CEO_ID = 5229586098
+CEO_ID = 7338429782
 OWNER_ID = 6864194951
 
 # Blacklist file path (relative to script directory)
@@ -3046,7 +3046,7 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     # Check if user is CEO (Venom) or OWNER (Suraj)
-    CEO_ID = 5229586098
+    CEO_ID = 7338429782
     OWNER_ID = 6864194951
     ALLOWED_LINK_USERS = [CEO_ID, OWNER_ID]
     
