@@ -226,7 +226,7 @@ def generate_group_photo(buyer_username, seller_username):
     """Generate group photo with buyer and seller usernames"""
     try:
         # Open the template image
-        img = Image.open("attached_assets/Untitled_1762800642304.jpeg")
+        img = Image.open("Untitled_1762800642304.jpeg")
         draw = ImageDraw.Draw(img)
         
         # Strip whitespace and @ symbol from usernames
@@ -2108,8 +2108,9 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as pyro_error:
             print(f"Pyrogram bio check failed for user {user_id}: {pyro_error}")
     
-    # Format the message (wallet address hidden in immediate response, shown in other messages)
-    response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+    # Format the message - show address if user provided it (not using saved address)
+    if using_saved_address:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
 
 ⚡️ <b>BUYER {username} | Userid: [{user_id}]</b>
 
@@ -2117,6 +2118,13 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 <i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
+    else:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+
+⚡️ <b>BUYER {username} | Userid: [{user_id}]</b>
+
+✅ <b>BUYER WALLET</b>
+<code>{crypto_address}</code>"""
     
     sent_message = await update.message.reply_text(response_message, parse_mode='HTML')
     
@@ -2257,8 +2265,9 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as pyro_error:
             print(f"Pyrogram bio check failed for user {user_id}: {pyro_error}")
     
-    # Format the message (wallet address hidden in immediate response, shown in other messages)
-    response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+    # Format the message - show address if user provided it (not using saved address)
+    if using_saved_address:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
 
 ⚡️ <b>SELLER {username} | Userid: [{user_id}]</b>
 
@@ -2266,6 +2275,13 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 <i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
+    else:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+
+⚡️ <b>SELLER {username} | Userid: [{user_id}]</b>
+
+✅ <b>SELLER WALLET</b>
+<code>{crypto_address}</code>"""
     
     sent_message = await update.message.reply_text(response_message, parse_mode='HTML')
     
