@@ -2124,7 +2124,9 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⚡️ <b>BUYER {username} | Userid: [{user_id}]</b>
 
 ✅ <b>BUYER WALLET</b>
-<code>{crypto_address}</code>"""
+<code>{crypto_address}</code>
+
+<i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
     
     sent_message = await update.message.reply_text(response_message, parse_mode='HTML')
     
@@ -2281,7 +2283,9 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ⚡️ <b>SELLER {username} | Userid: [{user_id}]</b>
 
 ✅ <b>SELLER WALLET</b>
-<code>{crypto_address}</code>"""
+<code>{crypto_address}</code>
+
+<i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
     
     sent_message = await update.message.reply_text(response_message, parse_mode='HTML')
     
