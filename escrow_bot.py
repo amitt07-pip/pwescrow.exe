@@ -602,9 +602,15 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     can_manage_chat=True,
                     can_delete_messages=True,
                     can_pin_messages=True,
+                    can_invite_users=True,
                     is_anonymous=True
                 )
             )
+            
+            # Create invite link with 2 member limit immediately after becoming anonymous admin
+            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
+            invite_link = invite_link_obj.invite_link
+            print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -631,11 +637,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # Create invite link with 2 member limit using the userbot (before leaving)
-            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
-            invite_link = invite_link_obj.invite_link
-            print(f"✅ P2P Invite link created by userbot with 2 member limit: {invite_link}")
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
@@ -738,9 +739,15 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     can_manage_chat=True,
                     can_delete_messages=True,
                     can_pin_messages=True,
+                    can_invite_users=True,
                     is_anonymous=True
                 )
             )
+            
+            # Create invite link with 2 member limit immediately after becoming anonymous admin
+            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
+            invite_link = invite_link_obj.invite_link
+            print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -767,11 +774,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # Create invite link with 2 member limit using the userbot (before leaving)
-            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
-            invite_link = invite_link_obj.invite_link
-            print(f"✅ Product Invite link created by userbot with 2 member limit: {invite_link}")
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
