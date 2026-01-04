@@ -68,8 +68,16 @@ refund_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': 
 # Global blacklist - users who are completely blocked from using the bot
 blacklisted_users = set()  # {user_id, ...}
 
+# Global fee setting (None means use default 0.5%/1% logic)
+global_fee_percent = None  # When set, this overrides the default fee for users with bio
+
+# CEO and OWNER IDs for restricted commands
+CEO_ID = 5229586098
+OWNER_ID = 6864194951
+
 # Blacklist file path (relative to script directory)
 BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blacklist.json")
+GLOBAL_FEE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_fee.json")
 
 def load_blacklist():
     """Load blacklisted users from file on startup."""
@@ -96,6 +104,38 @@ def save_blacklist():
         os.replace(temp_file, BLACKLIST_FILE)
     except IOError as e:
         print(f"⚠️ Failed to save blacklist file: {e}")
+
+def load_global_fee():
+    """Load global fee setting from file on startup."""
+    global global_fee_percent
+    try:
+        if os.path.exists(GLOBAL_FEE_FILE):
+            with open(GLOBAL_FEE_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and 'fee_percent' in data:
+                    global_fee_percent = data['fee_percent']
+                    print(f"✅ Loaded global fee: {global_fee_percent * 100}%")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load global fee file: {e}")
+
+def save_global_fee():
+    """Save global fee setting to file."""
+    try:
+        temp_file = GLOBAL_FEE_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({'fee_percent': global_fee_percent}, f)
+        os.replace(temp_file, GLOBAL_FEE_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save global fee file: {e}")
+
+def get_escrow_fee_percent(both_have_bio: bool) -> float:
+    """Get the escrow fee percent based on global setting and bio status."""
+    if both_have_bio and global_fee_percent is not None:
+        return global_fee_percent
+    elif both_have_bio:
+        return 0.005  # Default 0.5% for users with bio
+    else:
+        return 0.01  # Default 1% for users without bio
 
 async def check_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE = None) -> bool:
     """Check if any user in the chat is blacklisted. Returns True if blacklisted user found.
@@ -213,22 +253,22 @@ def generate_group_photo(buyer_username, seller_username):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
-    welcome_message = """💫 @PagaLEscrowBot 💫
+    welcome_message = """💫 *@PagaLEscrowBot* 💫
 Your Trustworthy Telegram Escrow Service
 
-Welcome to @PagaLEscrowBot. This bot provides a reliable escrow service for your transactions on Telegram.
-Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type /dispute and an arbitrator will join the group chat within 24 hours.
+Welcome to *@PagaLEscrowBot*. This bot provides a reliable escrow service for your transactions on Telegram.
+Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type `/dispute` and an arbitrator will join the group chat within 24 hours.
 
-🎟 ESCROW FEE:
+🎟 *ESCROW FEE:*
 1.0% for P2P and 1.0% for OTC Flat
 
-🌐 [UPDATES](https://t.me/BSR_ShoppiE) - [VOUCHES](https://t.me/PagaL_Escrow_Vouches) ☑️
+🌐 [(UPDATES)](https://t.me/BSR_ShoppiE) - [(VOUCHES)](https://t.me/PagaL_Escrow_Vouches) ☑️
 
-💬 Proceed with /escrow (to start with a new escrow)
+💬 *Proceed with* /escrow *(to start with a new escrow)*
 
-⚠️ IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.
+⚠️ *IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.*
 
-💡 Type /menu to summon a menu with all bots features"""
+💡 *Type* `/menu` *to summon a menu with all bots features*"""
     
     keyboard = [
         [InlineKeyboardButton("COMMANDS LIST 🤖", callback_data="commands_list")],
@@ -245,8 +285,37 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
     await update.message.reply_text(welcome_message, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=reply_markup)
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /menu command - placeholder for now"""
-    await update.message.reply_text("📋 Menu functionality coming soon...")
+    """Handle /menu command - same as start command"""
+    welcome_message = """💫 *@PagaLEscrowBot* 💫
+Your Trustworthy Telegram Escrow Service
+
+Welcome to *@PagaLEscrowBot*. This bot provides a reliable escrow service for your transactions on Telegram.
+Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type `/dispute` and an arbitrator will join the group chat within 24 hours.
+
+🎟 *ESCROW FEE:*
+1.0% for P2P and 1.0% for OTC Flat
+
+🌐 [(UPDATES)](https://t.me/BSR_ShoppiE) - [(VOUCHES)](https://t.me/PagaL_Escrow_Vouches) ☑️
+
+💬 *Proceed with* /escrow *(to start with a new escrow)*
+
+⚠️ *IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.*
+
+💡 *Type* `/menu` *to summon a menu with all bots features*"""
+    
+    keyboard = [
+        [InlineKeyboardButton("COMMANDS LIST 🤖", callback_data="commands_list")],
+        [InlineKeyboardButton("☎️ CONTACT", callback_data="contact")],
+        [InlineKeyboardButton("Updates 🔃", url="http://t.me/Escrow_PagaL"), 
+         InlineKeyboardButton("Vouches ✔️", url="http://t.me/PagaL_Escrow_Vouches")],
+        [InlineKeyboardButton("WHAT IS ESCROW ❔", callback_data="what_is_escrow"),
+         InlineKeyboardButton("Instructions 🧑‍🏫", callback_data="instructions")],
+        [InlineKeyboardButton("Terms 📝", callback_data="terms")],
+        [InlineKeyboardButton("Invites 👤", callback_data="invites")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(welcome_message, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=reply_markup)
 
 async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /escrow command - show escrow type selection"""
@@ -264,6 +333,7 @@ async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /dispute command - notify admins"""
+    global user_client
     chat = update.effective_chat
     
     # Only work in groups/supergroups
@@ -280,11 +350,23 @@ async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
     
-    # Create an invite link for the group
+    # Create an invite link for the group using userbot
     try:
-        # Create invite link with no member limit (admins can join)
-        chat_invite = await context.bot.create_chat_invite_link(chat_id=chat.id)
-        invite_link = chat_invite.invite_link
+        # Ensure userbot is connected
+        if not user_client:
+            user_client = Client(
+                "escrow_user_session",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                phone_number=PHONE
+            )
+        
+        if not user_client.is_connected:
+            await user_client.start()
+        
+        # Create invite link using userbot (so it can track joins better)
+        invite_link_obj = await user_client.create_chat_invite_link(chat.id)
+        invite_link = invite_link_obj.invite_link
         
         # Get group title
         group_title = chat.title or "Escrow Group"
@@ -433,7 +515,8 @@ Here you have a full command list, incase you do like to move through the bot us
         await query.edit_message_text(contact_message, reply_markup=reply_markup)
     
     elif query.data == "what_is_escrow":
-        await query.answer("**Coming Soon...**", show_alert=True)
+        await query.answer()
+        await query.message.reply_text("<b>Coming Soon...</b>", parse_mode='HTML')
     
     elif query.data == "instructions":
         instructions_message = """📘 GUIDE " HOW TO USE @PagaLEscrowBot ( Escrow Bot ) " FOR SAFE AND FASTEST HASSLE-FREE ESCROW 🚀  
@@ -1336,7 +1419,7 @@ Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}
                     
                     network_fee = 0.10
                     both_have_bio = release_data.get('buyer_has_bio', False) and release_data.get('seller_has_bio', False)
-                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
                     escrow_fee = escrow_balance * escrow_fee_percent
                     amount_after_fees = escrow_balance - network_fee - escrow_fee
                     
@@ -1458,7 +1541,7 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     network_fee = 0.10
                     both_have_bio = release_data.get('buyer_has_bio', False) and release_data.get('seller_has_bio', False)
-                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
                     escrow_fee = escrow_balance * escrow_fee_percent
                     amount_after_fees = escrow_balance - network_fee - escrow_fee
                     
@@ -1605,7 +1688,7 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     network_fee = 0.10
                     both_have_bio = refund_data.get('buyer_has_bio', False) and refund_data.get('seller_has_bio', False)
-                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
                     escrow_fee = escrow_balance * escrow_fee_percent
                     amount_after_fees = escrow_balance - network_fee - escrow_fee
                     
@@ -1718,7 +1801,7 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     network_fee = 0.10
                     both_have_bio = refund_data.get('buyer_has_bio', False) and refund_data.get('seller_has_bio', False)
-                    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
                     escrow_fee = escrow_balance * escrow_fee_percent
                     amount_after_fees = escrow_balance - network_fee - escrow_fee
                     
@@ -3330,7 +3413,7 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buyer_has_bio = buyer_info.get('has_bot_in_bio', False)
     seller_has_bio = seller_info.get('has_bot_in_bio', False)
     both_have_bio = buyer_has_bio and seller_has_bio
-    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
     
     # Format amounts with $ symbol and proper decimals
     if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
@@ -3537,7 +3620,7 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buyer_has_bio = buyer_info.get('has_bot_in_bio', False)
     seller_has_bio = seller_info.get('has_bot_in_bio', False)
     both_have_bio = buyer_has_bio and seller_has_bio
-    escrow_fee_percent = 0.005 if both_have_bio else 0.01
+    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
     
     # Format amounts
     if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
@@ -3667,57 +3750,162 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
+async def globalfee_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /globalfee command - set global escrow fee (CEO/OWNER only)"""
+    global global_fee_percent
+    user = update.effective_user
+    
+    # Check if user is CEO or OWNER
+    if user.id not in [CEO_ID, OWNER_ID]:
+        return  # Silent fail for non-authorized users
+    
+    # Check if fee percentage is provided
+    if not context.args:
+        # Show current fee
+        if global_fee_percent is not None:
+            current_fee = global_fee_percent * 100
+            await update.message.reply_text(
+                f"<b>Current Global Fee:</b> {current_fee}%\n\n"
+                f"<b>Usage:</b> <code>/globalfee 0.5%</code> to set fee to 0.5%",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                "<b>Current Global Fee:</b> Default (0.5% with bio, 1% without)\n\n"
+                "<b>Usage:</b> <code>/globalfee 0.5%</code> to set fee to 0.5%",
+                parse_mode='HTML'
+            )
+        return
+    
+    # Parse the fee percentage
+    fee_str = context.args[0].replace('%', '').strip()
+    try:
+        fee_value = float(fee_str)
+        if fee_value < 0 or fee_value > 100:
+            await update.message.reply_text(
+                "<b>Invalid fee percentage. Must be between 0 and 100.</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Convert to decimal (e.g., 0.5% -> 0.005)
+        global_fee_percent = fee_value / 100
+        save_global_fee()
+        
+        await update.message.reply_text(
+            f"<b>Global Escrow Fee Updated!</b>\n\n"
+            f"<b>New Fee:</b> {fee_value}%\n"
+            f"<b>Note:</b> This fee applies to all future escrows where both users have bot in bio.",
+            parse_mode='HTML'
+        )
+        print(f"✅ Global fee updated to {fee_value}% by user {user.id}")
+        
+    except ValueError:
+        await update.message.reply_text(
+            "<b>Invalid fee format. Use: /globalfee 0.5%</b>",
+            parse_mode='HTML'
+        )
+
 async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Track when members join and auto-promote admins using userbot"""
     global user_client
     result = update.chat_member
     
-    # Check if this is a new member joining (status changed from non-member to member)
-    was_member = result.old_chat_member.status in ['member', 'administrator', 'creator']
-    is_member = result.new_chat_member.status in ['member', 'administrator', 'creator']
+    user_id = result.new_chat_member.user.id
+    chat_id = result.chat.id
+    old_status = result.old_chat_member.status
+    new_status = result.new_chat_member.status
     
-    # Only process if someone just joined
+    print(f"📥 Chat member update: user {user_id} in chat {chat_id}: {old_status} -> {new_status}")
+    
+    # Check if this is a new member joining (status changed from non-member to member)
+    # Include 'restricted' status as it can be a transition state
+    was_member = old_status in ['member', 'administrator', 'creator', 'restricted']
+    is_member = new_status in ['member', 'administrator', 'creator', 'restricted']
+    
+    # Only process if someone just joined (was not a member, now is a member)
     if not was_member and is_member:
-        user_id = result.new_chat_member.user.id
-        chat_id = result.chat.id
+        print(f"👤 New member detected: {user_id} in chat {chat_id}")
         
         # Check if the user is in the admin list
         if user_id in ADMIN_IDS:
-            try:
-                # Ensure userbot is connected
-                if not user_client:
-                    user_client = Client(
-                        "escrow_user_session",
-                        api_id=API_ID,
-                        api_hash=API_HASH,
-                        phone_number=PHONE
-                    )
-                
-                if not user_client.is_connected:
-                    await user_client.start()
-                
-                # Promote the admin with full permissions using userbot
-                await user_client.promote_chat_member(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    privileges=ChatPrivileges(
-                        can_manage_chat=True,
-                        can_delete_messages=True,
-                        can_manage_video_chats=True,
-                        can_restrict_members=True,
-                        can_promote_members=True,
-                        can_change_info=True,
-                        can_invite_users=True,
-                        can_pin_messages=True
-                    )
+            print(f"🔑 User {user_id} is in ADMIN_IDS, attempting promotion...")
+            
+            # Ensure userbot is connected
+            if not user_client:
+                user_client = Client(
+                    "escrow_user_session",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    phone_number=PHONE
                 )
-                print(f"✅ Auto-promoted admin {user_id} in chat {chat_id} (via userbot)")
-            except Exception as e:
-                print(f"Failed to promote admin {user_id}: {e}")
+            
+            if not user_client.is_connected:
+                await user_client.start()
+            
+            # Wait a bit for Telegram to propagate the join event
+            await asyncio.sleep(2)
+            
+            # Retry loop with delay for peer resolution
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    if attempt > 0:
+                        await asyncio.sleep(2)
+                    
+                    print(f"  Attempt {attempt + 1}: Resolving peers via get_chat_members...")
+                    
+                    # First check if userbot is in this chat
+                    try:
+                        me = await user_client.get_me()
+                        await user_client.get_chat(chat_id)
+                        print(f"  Chat {chat_id} resolved successfully")
+                    except Exception as e:
+                        print(f"  Warning: Could not resolve chat: {e}")
+                        continue
+                    
+                    # Iterate through chat members to find and hydrate the user peer
+                    user_found = False
+                    try:
+                        async for member in user_client.get_chat_members(chat_id, limit=100):
+                            if member.user.id == user_id:
+                                user_found = True
+                                print(f"  Found user {user_id} in chat members, peer hydrated")
+                                break
+                    except Exception as e:
+                        print(f"  Warning: Could not iterate chat members: {e}")
+                    
+                    if not user_found:
+                        print(f"  User {user_id} not found in chat members yet, retrying...")
+                        continue
+                    
+                    # Now try to promote - the peer should be hydrated
+                    print(f"  Attempt {attempt + 1}: Promoting user...")
+                    await user_client.promote_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        privileges=ChatPrivileges(
+                            can_manage_chat=True,
+                            can_delete_messages=True,
+                            can_manage_video_chats=True,
+                            can_restrict_members=True,
+                            can_promote_members=True,
+                            can_change_info=True,
+                            can_invite_users=True,
+                            can_pin_messages=True
+                        )
+                    )
+                    print(f"✅ Auto-promoted admin {user_id} in chat {chat_id} (via userbot)")
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    print(f"  Attempt {attempt + 1} failed: {e}")
+                    if attempt == max_retries - 1:
+                        print(f"❌ Failed to promote admin {user_id} after {max_retries} attempts")
 
 def main():
-    # Load blacklist from file on startup
+    # Load blacklist and global fee from file on startup
     load_blacklist()
+    load_global_fee()
     
     if not BOT_TOKEN:
         print("❌ Error: ESCROW_BOT_TOKEN environment variable not set!")
@@ -3764,6 +3952,7 @@ def main():
     app.add_handler(CommandHandler("refund", refund_command))
     app.add_handler(CommandHandler("close", close_command))
     app.add_handler(CommandHandler("id", id_command))
+    app.add_handler(CommandHandler("globalfee", globalfee_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     

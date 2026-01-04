@@ -70,7 +70,8 @@ def main():
     
     print("✅ Bot is now polling for updates...")
     
-    app.run_polling()
+    # Include chat_member in allowed_updates to receive member join events
+    app.run_polling(allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"])
 
 if __name__ == "__main__":
     main()
