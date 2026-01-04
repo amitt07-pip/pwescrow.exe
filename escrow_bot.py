@@ -629,17 +629,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 disable_notification=True
             )
             
-            # Delete service messages (join/leave notifications) BEFORE leaving
+            # Delete service messages (join/leave notifications)
             try:
-                # Get recent messages to find and delete service messages while still in group
+                # Get recent messages to find and delete service messages
                 async for message in user_client.get_chat_history(supergroup.id, limit=10):
                     if message.service:
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # User account leaves the group (and won't rejoin)
-            await user_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
@@ -766,17 +763,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 disable_notification=True
             )
             
-            # Delete service messages (join/leave notifications) BEFORE leaving
+            # Delete service messages (join/leave notifications)
             try:
-                # Get recent messages to find and delete service messages while still in group
+                # Get recent messages to find and delete service messages
                 async for message in user_client.get_chat_history(supergroup.id, limit=10):
                     if message.service:
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # User account leaves the group (and won't rejoin)
-            await user_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
