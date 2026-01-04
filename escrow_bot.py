@@ -593,7 +593,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin temporarily to send message on behalf of group
+            # Promote user to anonymous admin with full permissions
             me = await user_client.get_me()
             await user_client.promote_chat_member(
                 chat_id=supergroup.id,
@@ -603,6 +603,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     can_delete_messages=True,
                     can_pin_messages=True,
                     can_invite_users=True,
+                    can_promote_members=True,
+                    can_restrict_members=True,
+                    can_change_info=True,
                     is_anonymous=True
                 )
             )
@@ -727,7 +730,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin temporarily to send message on behalf of group
+            # Promote user to anonymous admin with full permissions
             me = await user_client.get_me()
             await user_client.promote_chat_member(
                 chat_id=supergroup.id,
@@ -737,6 +740,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                     can_delete_messages=True,
                     can_pin_messages=True,
                     can_invite_users=True,
+                    can_promote_members=True,
+                    can_restrict_members=True,
+                    can_change_info=True,
                     is_anonymous=True
                 )
             )
@@ -3662,7 +3668,8 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Track when members join and auto-promote admins"""
+    """Track when members join and auto-promote admins using userbot"""
+    global user_client
     result = update.chat_member
     
     # Check if this is a new member joining (status changed from non-member to member)
@@ -3677,21 +3684,34 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Check if the user is in the admin list
         if user_id in ADMIN_IDS:
             try:
-                # Promote the admin with full permissions
-                await context.bot.promote_chat_member(
+                # Ensure userbot is connected
+                if not user_client:
+                    user_client = Client(
+                        "escrow_user_session",
+                        api_id=API_ID,
+                        api_hash=API_HASH,
+                        phone_number=PHONE
+                    )
+                
+                if not user_client.is_connected:
+                    await user_client.start()
+                
+                # Promote the admin with full permissions using userbot
+                await user_client.promote_chat_member(
                     chat_id=chat_id,
                     user_id=user_id,
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_manage_video_chats=True,
-                    can_restrict_members=True,
-                    can_promote_members=True,
-                    can_change_info=True,
-                    can_invite_users=True,
-                    can_pin_messages=True,
-                    can_post_messages=True
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_manage_video_chats=True,
+                        can_restrict_members=True,
+                        can_promote_members=True,
+                        can_change_info=True,
+                        can_invite_users=True,
+                        can_pin_messages=True
+                    )
                 )
-                print(f"✅ Auto-promoted admin {user_id} in chat {chat_id}")
+                print(f"✅ Auto-promoted admin {user_id} in chat {chat_id} (via userbot)")
             except Exception as e:
                 print(f"Failed to promote admin {user_id}: {e}")
 
