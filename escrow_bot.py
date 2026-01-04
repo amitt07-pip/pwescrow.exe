@@ -71,6 +71,12 @@ blacklisted_users = set()  # {user_id, ...}
 # Global fee setting (None means use default 0.5%/1% logic)
 global_fee_percent = None  # When set, this overrides the default fee for users with bio
 
+# Saved addresses per user {user_id: {'bsc': address, 'tron': address, 'btc': address, 'ltc': address}}
+saved_addresses = {}
+
+# Pending save operations {user_id: address} - temporary storage while user selects chain
+save_pending = {}
+
 # CEO and OWNER IDs for restricted commands
 CEO_ID = 5229586098
 OWNER_ID = 6864194951
@@ -78,6 +84,7 @@ OWNER_ID = 6864194951
 # Blacklist file path (relative to script directory)
 BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blacklist.json")
 GLOBAL_FEE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_fee.json")
+SAVED_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_addresses.json")
 
 def load_blacklist():
     """Load blacklisted users from file on startup."""
@@ -117,6 +124,29 @@ def load_global_fee():
                     print(f"✅ Loaded global fee: {global_fee_percent * 100}%")
     except (json.JSONDecodeError, IOError) as e:
         print(f"⚠️ Failed to load global fee file: {e}")
+
+def load_saved_addresses():
+    """Load saved addresses from file on startup."""
+    global saved_addresses
+    try:
+        if os.path.exists(SAVED_ADDRESSES_FILE):
+            with open(SAVED_ADDRESSES_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    saved_addresses = {int(k): v for k, v in data.items()}
+                    print(f"✅ Loaded saved addresses for {len(saved_addresses)} users")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load saved addresses file: {e}")
+
+def save_saved_addresses():
+    """Save saved addresses to file."""
+    try:
+        temp_file = SAVED_ADDRESSES_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({str(k): v for k, v in saved_addresses.items()}, f)
+        os.replace(temp_file, SAVED_ADDRESSES_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save saved addresses file: {e}")
 
 def save_global_fee():
     """Save global fee setting to file."""
@@ -1897,6 +1927,44 @@ Thank you for using @PagaLEscrowBot 🙌
         else:
             await query.answer("❌ Confirmation session expired!", show_alert=True)
     
+    elif query.data.startswith("save_chain_"):
+        parts = query.data.split("_")
+        chain = parts[2]  # bsc, tron, btc, or ltc
+        user_id = int(parts[3])
+        
+        # Only the user who initiated the save can select the chain
+        if query.from_user.id != user_id:
+            await query.answer("This is not your save request!", show_alert=True)
+            return
+        
+        # Check if there's a pending save for this user
+        if user_id not in save_pending:
+            await query.answer("Save session expired. Please use /save again.", show_alert=True)
+            return
+        
+        address = save_pending[user_id]
+        
+        # Initialize user's saved addresses if not exists
+        if user_id not in saved_addresses:
+            saved_addresses[user_id] = {}
+        
+        # Save the address for the selected chain
+        saved_addresses[user_id][chain] = address
+        save_saved_addresses()
+        
+        # Remove from pending
+        del save_pending[user_id]
+        
+        # Get chain display name
+        chain_names = {'bsc': 'BSC', 'tron': 'TRON', 'btc': 'BTC', 'ltc': 'LTC'}
+        chain_display = chain_names.get(chain, chain.upper())
+        
+        await query.edit_message_text(
+            f"<b>Your {chain_display} chain address is updated to</b> <code>{address}</code>",
+            parse_mode='HTML'
+        )
+        await query.answer(f"{chain_display} address saved!", show_alert=False)
+    
     elif query.data == "back_to_start":
         welcome_message = """💫 @PagaLEscrowBot 💫
 Your Trustworthy Telegram Escrow Service
@@ -1944,30 +2012,58 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Check if command has arguments (crypto address)
-    if not context.args or len(context.args) == 0:
-        # Send image with usage instructions
-        caption = (
-            "<code>/buyer [Your Crypto Address]</code>\n\n"
-            "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
-        )
-        try:
-            with open('photo_6316666496414845910_y.jpg', 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=caption,
-                    parse_mode='HTML'
-                )
-        except FileNotFoundError:
-            # Fallback to text if image not found
-            await update.message.reply_text(caption, parse_mode='HTML')
-        return
+    user_id = user.id
+    using_saved_address = False
     
-    # Get the crypto address from arguments
-    crypto_address = " ".join(context.args)
+    if not context.args or len(context.args) == 0:
+        # Check if user has a saved address (check all chains)
+        if user_id in saved_addresses and saved_addresses[user_id]:
+            # User has saved addresses - use the first available one
+            # Priority: bsc > tron > btc > ltc
+            for chain in ['bsc', 'tron', 'btc', 'ltc']:
+                if chain in saved_addresses[user_id]:
+                    crypto_address = saved_addresses[user_id][chain]
+                    using_saved_address = True
+                    break
+            
+            if not using_saved_address:
+                # No saved address found, show usage instructions
+                caption = (
+                    "<code>/buyer [Your Crypto Address]</code>\n\n"
+                    "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+                )
+                try:
+                    with open('photo_6316666496414845910_y.jpg', 'rb') as photo:
+                        await update.message.reply_photo(
+                            photo=photo,
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                except FileNotFoundError:
+                    await update.message.reply_text(caption, parse_mode='HTML')
+                return
+        else:
+            # No saved addresses, show image with usage instructions
+            caption = (
+                "<code>/buyer [Your Crypto Address]</code>\n\n"
+                "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+            )
+            try:
+                with open('photo_6316666496414845910_y.jpg', 'rb') as photo:
+                    await update.message.reply_photo(
+                        photo=photo,
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+            except FileNotFoundError:
+                await update.message.reply_text(caption, parse_mode='HTML')
+            return
+    else:
+        # Get the crypto address from arguments
+        crypto_address = " ".join(context.args)
     
     # Get username (or use first name if no username)
     username = f"@{user.username}" if user.username else user.first_name
-    user_id = user.id
     
     # Initialize chat in escrow_roles if not exists
     if chat_id not in escrow_roles:
@@ -2065,30 +2161,58 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     # Check if command has arguments (crypto address)
-    if not context.args or len(context.args) == 0:
-        # Send image with usage instructions
-        caption = (
-            "<code>/seller [Your Crypto Address]</code>\n\n"
-            "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
-        )
-        try:
-            with open('photo_6314481552062090385_y.jpg', 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=caption,
-                    parse_mode='HTML'
-                )
-        except FileNotFoundError:
-            # Fallback to text if image not found
-            await update.message.reply_text(caption, parse_mode='HTML')
-        return
+    user_id = user.id
+    using_saved_address = False
     
-    # Get the crypto address from arguments
-    crypto_address = " ".join(context.args)
+    if not context.args or len(context.args) == 0:
+        # Check if user has a saved address (check all chains)
+        if user_id in saved_addresses and saved_addresses[user_id]:
+            # User has saved addresses - use the first available one
+            # Priority: bsc > tron > btc > ltc
+            for chain in ['bsc', 'tron', 'btc', 'ltc']:
+                if chain in saved_addresses[user_id]:
+                    crypto_address = saved_addresses[user_id][chain]
+                    using_saved_address = True
+                    break
+            
+            if not using_saved_address:
+                # No saved address found, show usage instructions
+                caption = (
+                    "<code>/seller [Your Crypto Address]</code>\n\n"
+                    "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+                )
+                try:
+                    with open('photo_6314481552062090385_y.jpg', 'rb') as photo:
+                        await update.message.reply_photo(
+                            photo=photo,
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                except FileNotFoundError:
+                    await update.message.reply_text(caption, parse_mode='HTML')
+                return
+        else:
+            # No saved addresses, show image with usage instructions
+            caption = (
+                "<code>/seller [Your Crypto Address]</code>\n\n"
+                "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+            )
+            try:
+                with open('photo_6314481552062090385_y.jpg', 'rb') as photo:
+                    await update.message.reply_photo(
+                        photo=photo,
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+            except FileNotFoundError:
+                await update.message.reply_text(caption, parse_mode='HTML')
+            return
+    else:
+        # Get the crypto address from arguments
+        crypto_address = " ".join(context.args)
     
     # Get username (or use first name if no username)
     username = f"@{user.username}" if user.username else user.first_name
-    user_id = user.id
     
     # Initialize chat in escrow_roles if not exists
     if chat_id not in escrow_roles:
@@ -3750,6 +3874,41 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
+async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /save command - save user's crypto address for a specific chain"""
+    user = update.effective_user
+    user_id = user.id
+    
+    # Check if address is provided
+    if not context.args or len(context.args) == 0:
+        await update.message.reply_text(
+            "<b>Sorry! please add address after the command!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Get the address from arguments
+    address = " ".join(context.args)
+    
+    # Store pending save operation
+    save_pending[user_id] = address
+    
+    # Show chain selection buttons
+    keyboard = [
+        [InlineKeyboardButton("BSC", callback_data=f"save_chain_bsc_{user_id}"),
+         InlineKeyboardButton("TRON", callback_data=f"save_chain_tron_{user_id}")],
+        [InlineKeyboardButton("BTC", callback_data=f"save_chain_btc_{user_id}"),
+         InlineKeyboardButton("LTC", callback_data=f"save_chain_ltc_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"<b>Please select the chain for the below address</b>\n"
+        f"<b>Address:</b> <code>{address}</code>",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
 async def globalfee_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /globalfee command - set global escrow fee (CEO/OWNER only)"""
     global global_fee_percent
@@ -3903,9 +4062,10 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         print(f"❌ Failed to promote admin {user_id} after {max_retries} attempts")
 
 def main():
-    # Load blacklist and global fee from file on startup
+    # Load blacklist, global fee, and saved addresses from file on startup
     load_blacklist()
     load_global_fee()
+    load_saved_addresses()
     
     if not BOT_TOKEN:
         print("❌ Error: ESCROW_BOT_TOKEN environment variable not set!")
@@ -3953,6 +4113,7 @@ def main():
     app.add_handler(CommandHandler("close", close_command))
     app.add_handler(CommandHandler("id", id_command))
     app.add_handler(CommandHandler("globalfee", globalfee_command))
+    app.add_handler(CommandHandler("save", save_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     
