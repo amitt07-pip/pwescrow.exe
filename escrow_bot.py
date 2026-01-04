@@ -632,9 +632,10 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
             
-            # Create invite link using the userbot (before leaving)
-            invite_link = await user_client.export_chat_invite_link(supergroup.id)
-            print(f"✅ P2P Invite link created by userbot: {invite_link}")
+            # Create invite link with 2 member limit using the userbot (before leaving)
+            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
+            invite_link = invite_link_obj.invite_link
+            print(f"✅ P2P Invite link created by userbot with 2 member limit: {invite_link}")
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
@@ -767,9 +768,10 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
             
-            # Create invite link using the userbot (before leaving)
-            invite_link = await user_client.export_chat_invite_link(supergroup.id)
-            print(f"✅ Product Invite link created by userbot: {invite_link}")
+            # Create invite link with 2 member limit using the userbot (before leaving)
+            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
+            invite_link = invite_link_obj.invite_link
+            print(f"✅ Product Invite link created by userbot with 2 member limit: {invite_link}")
             
             # User account leaves the group (and won't rejoin)
             await user_client.leave_chat(supergroup.id)
