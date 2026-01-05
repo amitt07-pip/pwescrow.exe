@@ -2572,16 +2572,41 @@ Amount Recieved: <code>{initial_balance:.5f}</code> <b><u>[{initial_balance:.2f}
     escrow_roles[chat_id]['escrow_address'] = escrow_address
     
     # Start monitoring this address for deposits
+    # First, fetch current balance to avoid false positives from historical transactions
+    initial_balance = 0
+    last_seen_tx = None
+    
+    try:
+        if network == "BSC":
+            transactions = await check_bsc_transactions(escrow_address)
+            if transactions:
+                # Calculate existing balance from all historical transactions
+                for tx in transactions:
+                    initial_balance += int(tx['value']) / (10 ** 18)
+                # Store the most recent transaction hash to avoid re-processing
+                last_seen_tx = transactions[0].get('hash')  # transactions are sorted desc
+        elif network == "TRON":
+            transactions = await check_tron_transactions(escrow_address)
+            if transactions:
+                # Calculate existing balance from all historical transactions
+                for tx in transactions:
+                    initial_balance += int(tx['value']) / (10 ** 6)
+                # Store the most recent transaction ID to avoid re-processing
+                last_seen_tx = transactions[0].get('transaction_id')
+    except Exception as e:
+        print(f"Warning: Could not fetch initial balance for {escrow_address}: {e}")
+    
     monitored_addresses[escrow_address] = {
         'chat_id': chat_id,
         'network': network,
         'token': token,
         'network_label': network_label,
-        'total_balance': 0,
+        'total_balance': initial_balance,
+        'last_seen_tx': last_seen_tx,
         'last_check': datetime.now()
     }
     
-    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id}")
+    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id} (initial balance: {initial_balance})")
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command to show current escrow balance"""
@@ -2752,59 +2777,100 @@ async def monitor_deposits(bot_app):
                 network_label = info['network_label']
                 token = info['token']
                 current_balance = info['total_balance']
+                last_seen_tx = info.get('last_seen_tx')
                 
                 # Check transactions based on network
                 transactions = []
+                decimals = 18
+                token_name = "UNKNOWN"
+                tx_id_field = 'hash'
+                
                 if network == "BSC":
                     transactions = await check_bsc_transactions(address)
-                    # BSC USDT has 18 decimals
                     decimals = 18
                     token_name = "BSC-USD"
+                    tx_id_field = 'hash'
                 elif network == "TRON":
                     transactions = await check_tron_transactions(address)
-                    # TRON USDT has 6 decimals
                     decimals = 6
                     token_name = "TRON-USDT"
+                    tx_id_field = 'transaction_id'
                 
-                # Calculate total received
-                total_received = 0
-                for tx in transactions:
-                    if network == "BSC":
-                        total_received += int(tx['value']) / (10 ** decimals)
-                    elif network == "TRON":
-                        total_received += int(tx['value']) / (10 ** decimals)
+                if not transactions:
+                    continue
                 
-                # If new deposit detected
-                if total_received > current_balance:
-                    new_amount = total_received - current_balance
-                    monitored_addresses[address]['total_balance'] = total_received
-                    
-                    # Determine if OTC group for release/refund messages
-                    try:
-                        chat = await bot_app.bot.get_chat(chat_id=chat_id)
-                        is_otc_group = "OTC" in chat.title if chat.title else False
-                    except:
-                        is_otc_group = False
-                    
-                    # Set release/refund messages based on group type
-                    if is_otc_group:
-                        release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
-                        refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
-                    else:
-                        release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
-                        refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
-                    
-                    # Get the most recent transaction hash
-                    tx_hash = None
-                    if transactions:
-                        latest_tx = transactions[0]  # Most recent transaction
+                # Find new transactions (transactions newer than last_seen_tx)
+                new_transactions = []
+                if last_seen_tx:
+                    # Transactions are sorted desc (newest first)
+                    for tx in transactions:
+                        tx_id = tx.get(tx_id_field)
+                        if tx_id == last_seen_tx:
+                            break  # Stop when we reach the last seen transaction
+                        new_transactions.append(tx)
+                else:
+                    # No last_seen_tx means this is first check after initialization
+                    # The initial balance was already set, so we only process truly new txs
+                    # Calculate current total to compare
+                    total_received = sum(int(tx['value']) / (10 ** decimals) for tx in transactions)
+                    if total_received > current_balance:
+                        # There are new transactions since initialization
+                        # Find them by calculating running total from newest
+                        running_total = 0
+                        for tx in transactions:
+                            tx_amount = int(tx['value']) / (10 ** decimals)
+                            if running_total + tx_amount <= total_received - current_balance:
+                                new_transactions.append(tx)
+                                running_total += tx_amount
+                            else:
+                                break
+                
+                if not new_transactions:
+                    continue
+                
+                # Calculate new deposit amount
+                new_amount = sum(int(tx['value']) / (10 ** decimals) for tx in new_transactions)
+                total_received = current_balance + new_amount
+                
+                # Update monitoring state
+                monitored_addresses[address]['total_balance'] = total_received
+                monitored_addresses[address]['last_seen_tx'] = transactions[0].get(tx_id_field)
+                
+                # Determine if OTC group for release/refund messages
+                try:
+                    chat = await bot_app.bot.get_chat(chat_id=chat_id)
+                    is_otc_group = "OTC" in chat.title if chat.title else False
+                except:
+                    is_otc_group = False
+                
+                # Set release/refund messages based on group type
+                if is_otc_group:
+                    release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+                    refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
+                else:
+                    release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+                    refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
+                
+                # Get the most recent new transaction hash for the link
+                tx_hash = None
+                explorer_url = None
+                if new_transactions:
+                    tx_hash = new_transactions[0].get(tx_id_field, '')
+                    if tx_hash:
                         if network == "BSC":
-                            tx_hash = latest_tx.get('hash')
+                            explorer_url = f"https://bscscan.com/tx/{tx_hash}"
                         elif network == "TRON":
-                            tx_hash = latest_tx.get('transaction_id')
-                    
-                    # Send deposit confirmation message
-                    confirmation_message = f"""<b>Deposit 💵 has been confirmed</b>
+                            explorer_url = f"https://tronscan.org/#/transaction/{tx_hash}"
+                
+                if not explorer_url:
+                    # Fallback to address if no hash available
+                    if network == "BSC":
+                        explorer_url = f"https://bscscan.com/address/{address}"
+                    elif network == "TRON":
+                        explorer_url = f"https://tronscan.org/#/address/{address}"
+                
+                # Send deposit confirmation message
+                confirmation_message = f"""<b>Deposit 💵 has been confirmed</b>
 
 🪙 <b>Token:</b> {token_name}
 💰 <b>Amount:</b> {new_amount:.5f}[{new_amount:.2f}$]
@@ -2815,38 +2881,24 @@ async def monitor_deposits(bot_app):
 Useful commands:</b>
 🗒 <code>/release</code> = {release_msg}
 🗒 <code>/refund</code> = {refund_msg}"""
-                    
-                    # Create transaction button with hash link (if available)
-                    explorer_url = None
-                    if tx_hash:
-                        if network == "BSC":
-                            explorer_url = f"https://bscscan.com/tx/{tx_hash}"
-                        elif network == "TRON":
-                            explorer_url = f"https://tronscan.org/#/transaction/{tx_hash}"
-                    else:
-                        # Fallback to address if no hash available
-                        if network == "BSC":
-                            explorer_url = f"https://bscscan.com/address/{address}"
-                        elif network == "TRON":
-                            explorer_url = f"https://tronscan.org/#/address/{address}"
-                    
-                    keyboard = None
-                    if explorer_url:
-                        keyboard = [[InlineKeyboardButton("Transaction ➡️", url=explorer_url)]]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                    else:
-                        reply_markup = None
-                    
-                    try:
-                        await bot_app.bot.send_message(
-                            chat_id=chat_id,
-                            text=confirmation_message,
-                            parse_mode='HTML',
-                            reply_markup=reply_markup
-                        )
-                        print(f"✅ Deposit detected: {new_amount} USDT on {network} for chat {chat_id}")
-                    except Exception as e:
-                        print(f"Failed to send deposit notification: {e}")
+                
+                keyboard = None
+                if explorer_url:
+                    keyboard = [[InlineKeyboardButton("Transaction ➡️", url=explorer_url)]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                else:
+                    reply_markup = None
+                
+                try:
+                    await bot_app.bot.send_message(
+                        chat_id=chat_id,
+                        text=confirmation_message,
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+                    print(f"✅ Deposit detected: {new_amount} USDT on {network} for chat {chat_id}")
+                except Exception as e:
+                    print(f"Failed to send deposit notification: {e}")
         
         except Exception as e:
             print(f"Error in deposit monitoring: {e}")
