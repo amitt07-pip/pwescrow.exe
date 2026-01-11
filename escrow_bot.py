@@ -13,6 +13,8 @@ import hashlib
 import base64
 import asyncio
 import random
+import re
+import html
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 import io
@@ -4314,7 +4316,7 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def handle_deal_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle messages in groups to capture deal details (Quantity/Amount) after /dd"""
-    if not update.message or not update.message.text:
+    if not update.message:
         return
     
     chat = update.effective_chat
@@ -4324,32 +4326,39 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
     if chat_id not in awaiting_deal_details:
         return
     
-    # Skip command messages
-    if update.message.text.startswith('/'):
+    # Get message text (support both text messages and captions on photos/documents)
+    message_text = update.message.text or update.message.caption
+    if not message_text:
         return
     
-    message_text = update.message.text
-    is_otc = awaiting_deal_details[chat_id].get('is_otc', False)
+    # Skip command messages
+    if message_text.startswith('/'):
+        return
     
-    import re
+    print(f"📝 Deal details handler triggered for chat {chat_id}, message: {message_text[:100]}...")
+    
+    is_otc = awaiting_deal_details[chat_id].get('is_otc', False)
     deal_amount = None
     
     if is_otc:
         # For OTC groups, look for "Amount" field
-        # Match patterns like "Amount - 500", "Amount: 500", "Amount 500"
-        match = re.search(r'amount\s*[-:=]?\s*(.+)', message_text, re.IGNORECASE)
+        # Match patterns like "Amount - 500", "Amount: 500", "Amount — 500" (unicode dashes)
+        match = re.search(r'amount\s*[-–—:=]?\s*([^\n\r]+)', message_text, re.IGNORECASE)
         if match:
             deal_amount = match.group(1).strip()
+            print(f"  Found OTC Amount: {deal_amount}")
     else:
         # For P2P groups, look for "Quantity" field
-        # Match patterns like "Quantity - 10", "Quantity: 10", "Quantity 10"
-        match = re.search(r'quantity\s*[-:=]?\s*(.+)', message_text, re.IGNORECASE)
+        # Match patterns like "Quantity - 10", "Quantity: 10", "Quantity — 10" (unicode dashes)
+        match = re.search(r'quantity\s*[-–—:=]?\s*([^\n\r]+)', message_text, re.IGNORECASE)
         if match:
             deal_amount = match.group(1).strip()
+            print(f"  Found P2P Quantity: {deal_amount}")
     
     if deal_amount:
-        # Clean up the deal amount (take first line only, limit length)
-        deal_amount = deal_amount.split('\n')[0].strip()[:50]
+        # Clean up the deal amount (limit length, escape HTML)
+        deal_amount = deal_amount.strip()[:50]
+        deal_amount = html.escape(deal_amount)
         
         # Update the escrow log with the deal amount
         await update_escrow_log(context, chat_id, deal_amount=deal_amount)
@@ -4357,6 +4366,8 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
         
         # Clear the flag so we don't process more messages
         del awaiting_deal_details[chat_id]
+    else:
+        print(f"  No quantity/amount pattern found in message")
 
 def main():
     # Load blacklist, global fee, and saved addresses from file on startup
@@ -4414,7 +4425,8 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
+    # Handles both text messages and captions on photos/documents
+    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
     
     # Start deposit monitoring in background
     async def post_init(application):
