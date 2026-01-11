@@ -4219,9 +4219,14 @@ async def globalfee_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global global_fee_percent
     user = update.effective_user
     
+    print(f"🔍 /globalfee called by user {user.id if user else 'None'}, CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID}")
+    
     # Check if user is CEO or OWNER
     if user.id not in [CEO_ID, OWNER_ID]:
+        print(f"❌ /globalfee: User {user.id} not authorized (CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID})")
         return  # Silent fail for non-authorized users
+    
+    print(f"✅ /globalfee: User {user.id} authorized, processing command...")
     
     # Check if fee percentage is provided
     if not context.args:
