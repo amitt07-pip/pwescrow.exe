@@ -222,7 +222,7 @@ def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username=
 🔖 <b>Group Type:</b> {group_type}
 <b>Current Status:</b> {current_status}"""
 
-async def send_escrow_log(context, chat_id, group_type="P2P"):
+async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=None, seller_username=None, deal_amount=None):
     """Send initial escrow log to logs channel and store message ID"""
     if not LOGS_CHANNEL_ID:
         print(f"⚠️  LOGS_CHANNEL_ID not set - skipping escrow log for chat {chat_id}")
@@ -233,14 +233,24 @@ async def send_escrow_log(context, chat_id, group_type="P2P"):
         if chat_id not in escrow_roles:
             escrow_roles[chat_id] = {}
         
-        escrow_roles[chat_id]['log_data'] = {
-            'buyer_username': 'Not set',
-            'seller_username': 'Not set',
-            'deal_amount': 'Not set',
-            'group_type': group_type,
-            'current_status': 'Group Created',
-            'status_stage': 0
-        }
+        # Don't overwrite existing log_data if it exists (avoid re-initializing)
+        if 'log_data' not in escrow_roles[chat_id]:
+            escrow_roles[chat_id]['log_data'] = {
+                'buyer_username': buyer_username or 'Not set',
+                'seller_username': seller_username or 'Not set',
+                'deal_amount': deal_amount or 'Not set',
+                'group_type': group_type,
+                'current_status': 'Group Created',
+                'status_stage': 0
+            }
+        else:
+            # Update with provided values if they exist
+            if buyer_username:
+                escrow_roles[chat_id]['log_data']['buyer_username'] = buyer_username
+            if seller_username:
+                escrow_roles[chat_id]['log_data']['seller_username'] = seller_username
+            if deal_amount:
+                escrow_roles[chat_id]['log_data']['deal_amount'] = deal_amount
         
         log_message = build_escrow_log_message(
             chat_id=chat_id,
@@ -331,7 +341,7 @@ async def update_escrow_log(context, chat_id, new_status=None, buyer_username=No
 
 async def send_group_creation_log(context, chat_id, buyer_username, seller_username, group_type="P2P"):
     """Legacy function - now calls send_escrow_log for backward compatibility"""
-    await send_escrow_log(context, chat_id, group_type)
+    await send_escrow_log(context, chat_id, group_type, buyer_username=buyer_username, seller_username=seller_username)
 
 def generate_group_photo(buyer_username, seller_username):
     """Generate group photo with buyer and seller usernames"""
