@@ -611,6 +611,12 @@ Remember without it disputes wouldn't be resolved. Once filled proceed with Spec
     
     await update.message.reply_text(dd_message, parse_mode='HTML')
     
+    # Send initial escrow log to logs channel (if not already sent)
+    if chat_id not in escrow_roles or 'log_message_id' not in escrow_roles.get(chat_id, {}):
+        # Determine group type based on chat title
+        group_type = "OTC" if is_otc_group else "P2P"
+        await send_escrow_log(context, chat_id, group_type)
+    
     # Update escrow log status to "Form Sent.."
     await update_escrow_log(context, chat_id, new_status="Form Sent..")
 
@@ -1307,21 +1313,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         except Exception as e:
             print(f"❌ Error sending transaction message: {e}")
         
-        # Send log to logs channel with buyer and seller info
-        try:
-            # Determine group type based on chat title
-            chat = await context.bot.get_chat(chat_id=chat_id)
-            group_type = "OTC" if "OTC" in chat.title else "P2P"
-            
-            await send_group_creation_log(
-                context=context,
-                chat_id=chat_id,
-                buyer_username=buyer_info['username'],
-                seller_username=seller_info['username'],
-                group_type=group_type
-            )
-        except Exception as e:
-            print(f"Error sending log to channel: {e}")
+        # Log is now sent earlier in /dd command, just update status here
+        await update_escrow_log(context, chat_id, new_status="Token Selected")
     
     elif query.data == "reject_escrow":
         # Handle escrow rejection - delete the message
