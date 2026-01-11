@@ -196,31 +196,142 @@ def generate_referral_code(user_id):
     referral_code = b64_encoded.replace('/', '').replace('+', '').replace('=', '')[:15].upper()
     return f"ref_{referral_code}"
 
-async def send_group_creation_log(context, chat_id, buyer_username, seller_username, group_type="P2P"):
-    """Send group creation log to logs channel"""
-    if not LOGS_CHANNEL_ID:
-        print(f"⚠️  LOGS_CHANNEL_ID not set - skipping group creation log for chat {chat_id}")
-        return
-    
-    try:
-        log_message = f"""📊 <b>NEW ESCROW GROUP CREATED</b>
+# Status stages for escrow deals (used to prevent status regression)
+ESCROW_STATUS_STAGES = {
+    "Group Created": 0,
+    "Form Sent..": 1,
+    "Buyer Address Set Waiting For Seller Address To Be Set": 2,
+    "Seller Address Set Waiting For Buyer Address To Be Set": 2,
+    "Both Parties Address Set": 3,
+    "Token Selected": 4,
+    "Deposit Address Sent": 5,
+    "Deposit Detected": 6,
+    "Release/Refund Stage": 7,
+    "Deal Completed": 8
+}
+
+def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username="Not set", 
+                              deal_amount="Not set", group_type="P2P", current_status="Group Created"):
+    """Build the escrow log message with current data"""
+    return f"""<b>NEW ESCROW DEAL CREATED</b>
 
 🆔 <b>Chat ID:</b> <code>{chat_id}</code>
 👤 <b>Buyer:</b> {buyer_username}
 👤 <b>Seller:</b> {seller_username}
-🔖 <b>Type:</b> {group_type}
-📅 <b>Time:</b> {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}"""
+💸 <b>Deal Amount:</b> {deal_amount}
+🔖 <b>Group Type:</b> {group_type}
+<b>Current Status:</b> {current_status}"""
+
+async def send_escrow_log(context, chat_id, group_type="P2P"):
+    """Send initial escrow log to logs channel and store message ID"""
+    if not LOGS_CHANNEL_ID:
+        print(f"⚠️  LOGS_CHANNEL_ID not set - skipping escrow log for chat {chat_id}")
+        return None
+    
+    try:
+        # Initialize log data in escrow_roles
+        if chat_id not in escrow_roles:
+            escrow_roles[chat_id] = {}
         
-        print(f"📤 Attempting to send group creation log to channel {LOGS_CHANNEL_ID}...")
-        await context.bot.send_message(
+        escrow_roles[chat_id]['log_data'] = {
+            'buyer_username': 'Not set',
+            'seller_username': 'Not set',
+            'deal_amount': 'Not set',
+            'group_type': group_type,
+            'current_status': 'Group Created',
+            'status_stage': 0
+        }
+        
+        log_message = build_escrow_log_message(
+            chat_id=chat_id,
+            group_type=group_type,
+            current_status="Group Created"
+        )
+        
+        print(f"📤 Sending escrow log to channel {LOGS_CHANNEL_ID}...")
+        sent_msg = await context.bot.send_message(
             chat_id=LOGS_CHANNEL_ID,
             text=log_message,
             parse_mode='HTML'
         )
-        print(f"✅ Sent group creation log to channel {LOGS_CHANNEL_ID} for chat {chat_id}")
+        
+        # Store the message ID for later updates
+        escrow_roles[chat_id]['log_message_id'] = sent_msg.message_id
+        print(f"✅ Sent escrow log to channel {LOGS_CHANNEL_ID} for chat {chat_id}, message_id={sent_msg.message_id}")
+        return sent_msg.message_id
     except Exception as e:
-        print(f"❌ Failed to send log to channel {LOGS_CHANNEL_ID}: {type(e).__name__}: {e}")
+        print(f"❌ Failed to send escrow log to channel {LOGS_CHANNEL_ID}: {type(e).__name__}: {e}")
         print(f"   Make sure the bot is added to the logs channel and is an admin!")
+        return None
+
+async def update_escrow_log(context, chat_id, new_status=None, buyer_username=None, 
+                            seller_username=None, deal_amount=None, extra_info=""):
+    """Update the escrow log message with new status/data"""
+    if not LOGS_CHANNEL_ID:
+        return
+    
+    if chat_id not in escrow_roles:
+        print(f"⚠️  No escrow_roles for chat {chat_id}, cannot update log")
+        return
+    
+    log_message_id = escrow_roles[chat_id].get('log_message_id')
+    if not log_message_id:
+        print(f"⚠️  No log_message_id for chat {chat_id}, cannot update log")
+        return
+    
+    log_data = escrow_roles[chat_id].get('log_data', {})
+    
+    # Update fields if provided
+    if buyer_username is not None:
+        log_data['buyer_username'] = buyer_username
+    if seller_username is not None:
+        log_data['seller_username'] = seller_username
+    if deal_amount is not None:
+        log_data['deal_amount'] = deal_amount
+    
+    # Update status if provided and it's a progression (not regression)
+    if new_status is not None:
+        new_stage = ESCROW_STATUS_STAGES.get(new_status.split(" [")[0], 0)  # Handle statuses with extra info
+        current_stage = log_data.get('status_stage', 0)
+        
+        if new_stage >= current_stage:
+            # Add extra info to status if provided
+            if extra_info:
+                log_data['current_status'] = f"{new_status} [{extra_info}]"
+            else:
+                log_data['current_status'] = new_status
+            log_data['status_stage'] = new_stage
+        else:
+            print(f"⚠️  Skipping status regression: {log_data.get('current_status')} -> {new_status}")
+            return
+    
+    # Save updated log data
+    escrow_roles[chat_id]['log_data'] = log_data
+    
+    # Build and send updated message
+    log_message = build_escrow_log_message(
+        chat_id=chat_id,
+        buyer_username=log_data.get('buyer_username', 'Not set'),
+        seller_username=log_data.get('seller_username', 'Not set'),
+        deal_amount=log_data.get('deal_amount', 'Not set'),
+        group_type=log_data.get('group_type', 'P2P'),
+        current_status=log_data.get('current_status', 'Group Created')
+    )
+    
+    try:
+        await context.bot.edit_message_text(
+            chat_id=LOGS_CHANNEL_ID,
+            message_id=log_message_id,
+            text=log_message,
+            parse_mode='HTML'
+        )
+        print(f"✅ Updated escrow log for chat {chat_id}: {log_data.get('current_status')}")
+    except Exception as e:
+        print(f"❌ Failed to update escrow log for chat {chat_id}: {type(e).__name__}: {e}")
+
+async def send_group_creation_log(context, chat_id, buyer_username, seller_username, group_type="P2P"):
+    """Legacy function - now calls send_escrow_log for backward compatibility"""
+    await send_escrow_log(context, chat_id, group_type)
 
 def generate_group_photo(buyer_username, seller_username):
     """Generate group photo with buyer and seller usernames"""
@@ -489,6 +600,9 @@ Conditions (if any) -</code>
 Remember without it disputes wouldn't be resolved. Once filled proceed with Specifications of the seller or buyer with /seller or /buyer <b>[CRYPTO ADDRESS]</b>"""
     
     await update.message.reply_text(dd_message, parse_mode='HTML')
+    
+    # Update escrow log status to "Form Sent.."
+    await update_escrow_log(context, chat_id, new_status="Form Sent..")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks"""
@@ -991,6 +1105,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Store token and network for later use
             escrow_roles[chat_id]['selected_token'] = token
             escrow_roles[chat_id]['selected_network'] = network
+            
+            # Update escrow log status to "Token Selected"
+            await update_escrow_log(context, chat_id, new_status="Token Selected")
             
             # Determine who needs to accept/reject
             # If buyer initiated, show seller info and seller accepts/rejects
@@ -1509,8 +1626,12 @@ Thank you for using @PagaLEscrowBot 🙌
                         
                         if new_balance <= 0:
                             escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                            # Update escrow log status to "Deal Completed"
+                            await update_escrow_log(context, release_data['chat_id'], new_status="Deal Completed")
                     except:
                         escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                        # Update escrow log status to "Deal Completed"
+                        await update_escrow_log(context, release_data['chat_id'], new_status="Deal Completed")
                     
                     del release_pending[message_id]
                 
@@ -1627,6 +1748,8 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     if escrow_roles[release_data['chat_id']]['balance'] <= 0:
                         escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                        # Update escrow log status to "Deal Completed"
+                        await update_escrow_log(context, release_data['chat_id'], new_status="Deal Completed")
                     
                     del release_pending[message_id]
                 else:
@@ -1771,6 +1894,8 @@ Thank you for using @PagaLEscrowBot 🙌
                             print(f"Error sending logs message: {e}")
                     
                     escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                    # Update escrow log status to "Deal Completed"
+                    await update_escrow_log(context, refund_data['chat_id'], new_status="Deal Completed")
                     
                     del refund_pending[message_id]
                 
@@ -1891,8 +2016,12 @@ Thank you for using @PagaLEscrowBot 🙌
                         
                         if new_balance <= 0:
                             escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                            # Update escrow log status to "Deal Completed"
+                            await update_escrow_log(context, refund_data['chat_id'], new_status="Deal Completed")
                     except:
                         escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                        # Update escrow log status to "Deal Completed"
+                        await update_escrow_log(context, refund_data['chat_id'], new_status="Deal Completed")
                     
                     del refund_pending[message_id]
                 else:
@@ -2150,12 +2279,20 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "<b>Please set seller using /seller [DEPOSIT ADDRESS]</b>",
                 parse_mode='HTML'
             )
+            # Update log: Buyer set, waiting for seller
+            await update_escrow_log(context, chat_id, 
+                new_status="Buyer Address Set Waiting For Seller Address To Be Set",
+                buyer_username=username)
         else:
             # Both buyer and seller are set
             await update.message.reply_text(
                 "<b>Use /token to Choose crypto.</b>",
                 parse_mode='HTML'
             )
+            # Update log: Both parties set
+            await update_escrow_log(context, chat_id, 
+                new_status="Both Parties Address Set",
+                buyer_username=username)
 
 async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /seller command with crypto address"""
@@ -2309,12 +2446,20 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "<b>Please set buyer using /buyer [DEPOSIT ADDRESS]</b>",
                 parse_mode='HTML'
             )
+            # Update log: Seller set, waiting for buyer
+            await update_escrow_log(context, chat_id, 
+                new_status="Seller Address Set Waiting For Buyer Address To Be Set",
+                seller_username=username)
         else:
             # Both buyer and seller are set
             await update.message.reply_text(
                 "<b>Use /token to Choose crypto.</b>",
                 parse_mode='HTML'
             )
+            # Update log: Both parties set
+            await update_escrow_log(context, chat_id, 
+                new_status="Both Parties Address Set",
+                seller_username=username)
 
 async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /token command to choose cryptocurrency"""
@@ -2570,6 +2715,10 @@ Amount Recieved: <code>{initial_balance:.5f}</code> <b><u>[{initial_balance:.2f}
     
     # Store the escrow address for transaction button
     escrow_roles[chat_id]['escrow_address'] = escrow_address
+    
+    # Update escrow log status to "Deposit Address Sent" with last 4 chars of address
+    last_4_chars = escrow_address[-4:]
+    await update_escrow_log(context, chat_id, new_status="Deposit Address Sent", extra_info=last_4_chars)
     
     # Start monitoring this address for deposits
     # First, fetch current balance to avoid false positives from historical transactions
@@ -2897,6 +3046,16 @@ Useful commands:</b>
                         reply_markup=reply_markup
                     )
                     print(f"✅ Deposit detected: {new_amount} USDT on {network} for chat {chat_id}")
+                    
+                    # Update escrow log status to "Deposit Detected" with amount
+                    # Create a mock context-like object for update_escrow_log
+                    class MockContext:
+                        def __init__(self, bot):
+                            self.bot = bot
+                    mock_context = MockContext(bot_app.bot)
+                    await update_escrow_log(mock_context, chat_id, 
+                        new_status="Deposit Detected", 
+                        extra_info=f"{new_amount:.2f}")
                 except Exception as e:
                     print(f"Failed to send deposit notification: {e}")
         
@@ -3691,6 +3850,9 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'seller_has_bio': seller_info.get('has_bot_in_bio', False),
         'original_message': confirmation_message
     }
+    
+    # Update escrow log status to "Release/Refund Stage"
+    await update_escrow_log(context, chat.id, new_status="Release/Refund Stage")
 
 async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /refund command - only buyer in P2P or seller in OTC can refund funds"""
@@ -3895,6 +4057,9 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'seller_has_bio': seller_info.get('has_bot_in_bio', False),
         'original_message': refund_message
     }
+    
+    # Update escrow log status to "Release/Refund Stage"
+    await update_escrow_log(context, chat.id, new_status="Release/Refund Stage")
 
 async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /verify command to check if an address belongs to the bot"""
