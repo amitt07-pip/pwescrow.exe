@@ -212,7 +212,8 @@ ESCROW_STATUS_STAGES = {
     "Deposit Address Sent": 5,
     "Deposit Detected": 6,
     "Release/Refund Stage": 7,
-    "Deal Completed": 8
+    "Deal Completed": 8,
+    "Deal Closed": 9
 }
 
 def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username="Not set", 
@@ -3663,6 +3664,12 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
         
         await asyncio.sleep(1)
+        
+        # Update escrow log to "Deal Closed" before deleting the group
+        try:
+            await update_escrow_log(context, chat.id, new_status="Deal Closed")
+        except Exception as e:
+            print(f"⚠️  Failed to update escrow log for close: {e}")
         
         # Permanently delete the group for all members
         # Use the chat ID from join_chat() directly - don't convert it
