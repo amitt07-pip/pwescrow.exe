@@ -2865,6 +2865,11 @@ async def addbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     new_balance = current_balance + amount
     escrow_roles[chat_id]['balance'] = new_balance
     
+    # Update escrow log with new balance as deal_amount
+    await update_escrow_log(context, chat_id, 
+        new_status="Deposit Detected",
+        deal_amount=f"{new_balance:.5f} USDT")
+    
     # Send confirmation with the format requested: Amount Received: 500.00 [500.00$]
     await update.message.reply_text(
         f"<b>✅ Balance updated successfully!</b>\n\n"
@@ -3068,8 +3073,10 @@ Useful commands:</b>
                         def __init__(self, bot):
                             self.bot = bot
                     mock_context = MockContext(bot_app.bot)
+                    # Update deal_amount to show current escrow balance (cumulative)
                     await update_escrow_log(mock_context, chat_id, 
                         new_status="Deposit Detected", 
+                        deal_amount=f"{total_received:.5f} USDT",
                         extra_info=f"{new_amount:.2f}")
                 except Exception as e:
                     print(f"Failed to send deposit notification: {e}")
@@ -3187,6 +3194,11 @@ Useful commands:</b>
         if chat_id in escrow_roles:
             escrow_roles[chat_id]['deposit_confirmed'] = True
             escrow_roles[chat_id]['balance'] = new_balance
+        
+        # Update escrow log with new balance as deal_amount
+        await update_escrow_log(context, chat_id, 
+            new_status="Deposit Detected",
+            deal_amount=f"{new_balance:.5f} USDT")
         
         await update.message.reply_text(
             f"<b>✅ Deposit confirmation sent to chat {chat_id}</b>\n"
