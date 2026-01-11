@@ -1235,12 +1235,16 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         # Check if both buyer and seller have @PagaLEscrowBot in their bio
         buyer_has_bot = buyer_info.get('has_bot_in_bio', False)
         seller_has_bot = seller_info.get('has_bot_in_bio', False)
+        both_have_bio = buyer_has_bot and seller_has_bot
+        
+        # Get the actual fee percentage (respects global fee setting)
+        actual_fee_percent = get_escrow_fee_percent(both_have_bio) * 100  # Convert to percentage
         
         # Determine fee message
-        if buyer_has_bot and seller_has_bot:
-            fee_message = "<b>Your Fee is 0.5% as both buyer and seller are using @PagaLEscrowBot in your bio.</b>"
+        if both_have_bio:
+            fee_message = f"<b>Your Fee is {actual_fee_percent}% as both buyer and seller are using @PagaLEscrowBot in your bio.</b>"
         else:
-            fee_message = "<b>Your Fee is 1.0% as both buyer and seller are not using @PagaLEscrowBot in your bio.</b>"
+            fee_message = f"<b>Your Fee is {actual_fee_percent}% as both buyer and seller are not using @PagaLEscrowBot in your bio.</b>"
         
         # Send fee message independently
         try:
