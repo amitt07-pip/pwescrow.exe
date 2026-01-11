@@ -4428,11 +4428,22 @@ def main():
     # Handles both text messages and captions on photos/documents
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
     
-    # Start deposit monitoring in background
+    # Start deposit monitoring in background using PTB's task management
     async def post_init(application):
-        asyncio.create_task(monitor_deposits(application))
+        # Use application.create_task so PTB tracks and cancels it on shutdown
+        application.create_task(monitor_deposits(application))
+    
+    # Properly stop Pyrogram client on shutdown
+    async def post_shutdown(application):
+        if user_client and user_client.is_connected:
+            try:
+                await user_client.stop()
+                print("✅ Pyrogram client stopped cleanly")
+            except Exception as e:
+                print(f"⚠️  Error stopping Pyrogram client: {e}")
     
     app.post_init = post_init
+    app.post_shutdown = post_shutdown
     
     print("✅ @PagaLEscrowBot is running...")
     print(f"✅ Registered admin IDs: {ADMIN_IDS}")
@@ -4446,17 +4457,12 @@ def main():
     else:
         print("⚠️  Logs channel not configured (LOGS_CHANNEL_ID not set)")
     
-    try:
-        # Run polling with faster updates
-        app.run_polling(
-            poll_interval=0.5,  # Check for updates every 0.5 seconds
-            timeout=10,  # Faster timeout
-            drop_pending_updates=False
-        )
-    finally:
-        # Stop user client if it's running
-        if user_client and user_client.is_connected:
-            asyncio.run(user_client.stop())
+    # Run polling with faster updates
+    app.run_polling(
+        poll_interval=0.5,  # Check for updates every 0.5 seconds
+        timeout=10,  # Faster timeout
+        drop_pending_updates=False
+    )
 
 if __name__ == "__main__":
     main()
