@@ -3665,9 +3665,18 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await asyncio.sleep(1)
         
-        # Update escrow log to "Deal Closed" before deleting the group
+        # Update escrow log to just "Deal Closed!" before deleting the group
         try:
-            await update_escrow_log(context, chat.id, new_status="Deal Closed")
+            if chat.id in escrow_roles:
+                log_message_id = escrow_roles[chat.id].get('log_message_id')
+                if log_message_id and LOGS_CHANNEL_ID:
+                    await context.bot.edit_message_text(
+                        chat_id=LOGS_CHANNEL_ID,
+                        message_id=log_message_id,
+                        text="<b>Deal Closed!</b>",
+                        parse_mode='HTML'
+                    )
+                    print(f"✅ Updated escrow log to 'Deal Closed!' for chat {chat.id}")
         except Exception as e:
             print(f"⚠️  Failed to update escrow log for close: {e}")
         
