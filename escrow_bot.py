@@ -77,6 +77,9 @@ saved_addresses = {}
 # Pending save operations {user_id: address} - temporary storage while user selects chain
 save_pending = {}
 
+# Track chats awaiting deal details after /dd command {chat_id: {'is_otc': bool}}
+awaiting_deal_details = {}
+
 # CEO and OWNER IDs for restricted commands
 CEO_ID = 7338429782
 OWNER_ID = 6864194951
@@ -610,6 +613,9 @@ Conditions (if any) -</code>
 Remember without it disputes wouldn't be resolved. Once filled proceed with Specifications of the seller or buyer with /seller or /buyer <b>[CRYPTO ADDRESS]</b>"""
     
     await update.message.reply_text(dd_message, parse_mode='HTML')
+    
+    # Set flag to capture deal details from next message
+    awaiting_deal_details[chat_id] = {'is_otc': is_otc_group}
     
     # Send initial escrow log to logs channel (if not already sent)
     if chat_id not in escrow_roles or 'log_message_id' not in escrow_roles.get(chat_id, {}):
@@ -4306,6 +4312,52 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     if attempt == max_retries - 1:
                         print(f"❌ Failed to promote admin {user_id} after {max_retries} attempts")
 
+async def handle_deal_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages in groups to capture deal details (Quantity/Amount) after /dd"""
+    if not update.message or not update.message.text:
+        return
+    
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Only process if we're awaiting deal details for this chat
+    if chat_id not in awaiting_deal_details:
+        return
+    
+    # Skip command messages
+    if update.message.text.startswith('/'):
+        return
+    
+    message_text = update.message.text
+    is_otc = awaiting_deal_details[chat_id].get('is_otc', False)
+    
+    import re
+    deal_amount = None
+    
+    if is_otc:
+        # For OTC groups, look for "Amount" field
+        # Match patterns like "Amount - 500", "Amount: 500", "Amount 500"
+        match = re.search(r'amount\s*[-:=]?\s*(.+)', message_text, re.IGNORECASE)
+        if match:
+            deal_amount = match.group(1).strip()
+    else:
+        # For P2P groups, look for "Quantity" field
+        # Match patterns like "Quantity - 10", "Quantity: 10", "Quantity 10"
+        match = re.search(r'quantity\s*[-:=]?\s*(.+)', message_text, re.IGNORECASE)
+        if match:
+            deal_amount = match.group(1).strip()
+    
+    if deal_amount:
+        # Clean up the deal amount (take first line only, limit length)
+        deal_amount = deal_amount.split('\n')[0].strip()[:50]
+        
+        # Update the escrow log with the deal amount
+        await update_escrow_log(context, chat_id, deal_amount=deal_amount)
+        print(f"✅ Captured deal amount for chat {chat_id}: {deal_amount}")
+        
+        # Clear the flag so we don't process more messages
+        del awaiting_deal_details[chat_id]
+
 def main():
     # Load blacklist, global fee, and saved addresses from file on startup
     load_blacklist()
@@ -4361,6 +4413,8 @@ def main():
     app.add_handler(CommandHandler("save", save_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
+    # Message handler to capture deal details (Quantity/Amount) after /dd command
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
     
     # Start deposit monitoring in background
     async def post_init(application):
