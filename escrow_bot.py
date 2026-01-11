@@ -3665,18 +3665,41 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await asyncio.sleep(1)
         
-        # Update escrow log to just "Deal Closed!" before deleting the group
+        # Update escrow log based on deposit status
         try:
             if chat.id in escrow_roles:
                 log_message_id = escrow_roles[chat.id].get('log_message_id')
+                log_data = escrow_roles[chat.id].get('log_data', {})
+                status_stage = log_data.get('status_stage', 0)
+                
                 if log_message_id and LOGS_CHANNEL_ID:
-                    await context.bot.edit_message_text(
-                        chat_id=LOGS_CHANNEL_ID,
-                        message_id=log_message_id,
-                        text="<b>Deal Closed!</b>",
-                        parse_mode='HTML'
-                    )
-                    print(f"✅ Updated escrow log to 'Deal Closed!' for chat {chat.id}")
+                    # Check if deposit was detected (stage 6 or higher)
+                    if status_stage >= 6:  # Deposit Detected or later
+                        # Keep all info, just update status to "Deal Closed"
+                        log_message = build_escrow_log_message(
+                            chat_id=chat.id,
+                            buyer_username=log_data.get('buyer_username', 'Not set'),
+                            seller_username=log_data.get('seller_username', 'Not set'),
+                            deal_amount=log_data.get('deal_amount', 'Not set'),
+                            group_type=log_data.get('group_type', 'P2P'),
+                            current_status="Deal Closed"
+                        )
+                        await context.bot.edit_message_text(
+                            chat_id=LOGS_CHANNEL_ID,
+                            message_id=log_message_id,
+                            text=log_message,
+                            parse_mode='HTML'
+                        )
+                        print(f"✅ Updated escrow log to 'Deal Closed' (with info) for chat {chat.id}")
+                    else:
+                        # Before deposit detected - just show "Deal Closed!" in bold
+                        await context.bot.edit_message_text(
+                            chat_id=LOGS_CHANNEL_ID,
+                            message_id=log_message_id,
+                            text="<b>Deal Closed!</b>",
+                            parse_mode='HTML'
+                        )
+                        print(f"✅ Updated escrow log to 'Deal Closed!' (no info) for chat {chat.id}")
         except Exception as e:
             print(f"⚠️  Failed to update escrow log for close: {e}")
         
