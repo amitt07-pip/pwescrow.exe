@@ -490,6 +490,10 @@ async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /dispute command - notify admins"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     global user_client
     chat = update.effective_chat
     
@@ -556,6 +560,10 @@ async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /dd command - deal details form"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     chat = update.effective_chat
     chat_id = chat.id
     
@@ -2144,6 +2152,10 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
 
 async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /buyer command with crypto address"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     user = update.effective_user
     chat = update.effective_chat
     chat_id = chat.id
@@ -2311,6 +2323,10 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /seller command with crypto address"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     user = update.effective_user
     chat = update.effective_chat
     chat_id = chat.id
@@ -2478,6 +2494,10 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /token command to choose cryptocurrency"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     
@@ -2520,6 +2540,10 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /deposit command to generate deposit address"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     chat = update.effective_chat
     chat_id = chat.id
     
@@ -2774,6 +2798,10 @@ Amount Recieved: <code>{initial_balance:.5f}</code> <b><u>[{initial_balance:.2f}
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command to show current escrow balance"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     chat = update.effective_chat
     chat_id = chat.id
     
@@ -3674,6 +3702,10 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /release command - only seller in P2P or buyer in OTC can release funds"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     user = update.effective_user
     chat = update.effective_chat
     
@@ -3883,6 +3915,10 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /refund command - only buyer in P2P or seller in OTC can refund funds"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     user = update.effective_user
     chat = update.effective_chat
     
@@ -4141,6 +4177,10 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /save command - save user's crypto address for a specific chain"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     user = update.effective_user
     user_id = user.id
     
@@ -4229,6 +4269,134 @@ async def globalfee_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>Invalid fee format. Use: /globalfee 0.5%</b>",
             parse_mode='HTML'
         )
+
+async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /empty command - delete all userbot-created groups (CEO/OWNER only)"""
+    global user_client, escrow_roles, monitored_addresses
+    user = update.effective_user
+    
+    # Check if user is CEO or OWNER
+    if user.id not in [CEO_ID, OWNER_ID]:
+        return  # Silent fail for non-authorized users
+    
+    # Check for confirmation
+    if not context.args or context.args[0].upper() != 'CONFIRM':
+        # Count active groups
+        group_count = len(escrow_roles)
+        await update.message.reply_text(
+            f"<b>⚠️ WARNING: This will delete ALL {group_count} escrow groups!</b>\n\n"
+            f"<b>To confirm, use:</b> <code>/empty CONFIRM</code>\n\n"
+            f"<b>This action cannot be undone!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Get list of chat IDs to delete
+    chat_ids = list(escrow_roles.keys())
+    
+    if not chat_ids:
+        await update.message.reply_text(
+            "<b>No active escrow groups found.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Send initial status message
+    status_msg = await update.message.reply_text(
+        f"<b>🗑️ Deleting {len(chat_ids)} groups...</b>\n\n"
+        f"<b>Progress:</b> 0/{len(chat_ids)}",
+        parse_mode='HTML'
+    )
+    
+    # Ensure userbot is connected
+    try:
+        if not user_client:
+            user_client = Client(
+                "escrow_user_session",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                phone_number=PHONE
+            )
+        
+        if not user_client.is_connected:
+            await user_client.start()
+    except Exception as e:
+        await status_msg.edit_text(
+            f"<b>❌ Failed to connect userbot: {str(e)}</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    deleted_count = 0
+    failed_count = 0
+    failed_chats = []
+    
+    for i, chat_id in enumerate(chat_ids):
+        try:
+            # Try to delete the group using userbot
+            await user_client.delete_supergroup(chat_id)
+            deleted_count += 1
+            
+            # Remove from escrow_roles
+            if chat_id in escrow_roles:
+                del escrow_roles[chat_id]
+            
+            # Remove from monitored_addresses
+            addresses_to_remove = [addr for addr, info in monitored_addresses.items() if info.get('chat_id') == chat_id]
+            for addr in addresses_to_remove:
+                del monitored_addresses[addr]
+            
+            print(f"✅ Deleted group {chat_id}")
+            
+        except FloodWait as e:
+            # Handle rate limiting
+            await asyncio.sleep(e.value)
+            try:
+                await user_client.delete_supergroup(chat_id)
+                deleted_count += 1
+                if chat_id in escrow_roles:
+                    del escrow_roles[chat_id]
+            except Exception as e2:
+                failed_count += 1
+                failed_chats.append(chat_id)
+                print(f"❌ Failed to delete group {chat_id}: {e2}")
+                
+        except Exception as e:
+            failed_count += 1
+            failed_chats.append(chat_id)
+            print(f"❌ Failed to delete group {chat_id}: {e}")
+        
+        # Update progress every 5 groups
+        if (i + 1) % 5 == 0 or i == len(chat_ids) - 1:
+            try:
+                await status_msg.edit_text(
+                    f"<b>🗑️ Deleting groups...</b>\n\n"
+                    f"<b>Progress:</b> {i + 1}/{len(chat_ids)}\n"
+                    f"<b>Deleted:</b> {deleted_count}\n"
+                    f"<b>Failed:</b> {failed_count}",
+                    parse_mode='HTML'
+                )
+            except:
+                pass
+        
+        # Small delay to avoid rate limiting
+        await asyncio.sleep(0.5)
+    
+    # Final status
+    result_msg = f"<b>🗑️ Empty Complete!</b>\n\n"
+    result_msg += f"<b>Total Groups:</b> {len(chat_ids)}\n"
+    result_msg += f"<b>Deleted:</b> {deleted_count}\n"
+    result_msg += f"<b>Failed:</b> {failed_count}"
+    
+    if failed_chats:
+        result_msg += f"\n\n<b>Failed Chat IDs:</b>\n"
+        for chat_id in failed_chats[:10]:  # Show first 10
+            result_msg += f"<code>{chat_id}</code>\n"
+        if len(failed_chats) > 10:
+            result_msg += f"... and {len(failed_chats) - 10} more"
+    
+    await status_msg.edit_text(result_msg, parse_mode='HTML')
+    print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {failed_count} failed")
 
 async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Track when members join and auto-promote admins using userbot"""
@@ -4434,6 +4602,7 @@ def main():
     app.add_handler(CommandHandler("id", id_command))
     app.add_handler(CommandHandler("globalfee", globalfee_command))
     app.add_handler(CommandHandler("save", save_command))
+    app.add_handler(CommandHandler("empty", empty_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
