@@ -9,6 +9,8 @@ import os
 if sys.version_info >= (3, 13):
     sys.modules["imghdr"] = types.ModuleType("imghdr")
 
+from telegram.ext import MessageHandler, filters
+
 def main():
     escrow_token = os.getenv("ESCROW_BOT_TOKEN")
     if not escrow_token:
@@ -50,13 +52,27 @@ def main():
     app.add_handler(CommandHandler("refund", escrow_bot.refund_command))
     app.add_handler(CommandHandler("globalfee", escrow_bot.globalfee_command))
     app.add_handler(CommandHandler("save", escrow_bot.save_command))
+    app.add_handler(CommandHandler("empty", escrow_bot.empty_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
     app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
+    # Message handler to capture deal details (Quantity/Amount) after /dd command
+    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, escrow_bot.handle_deal_details_message))
     
     async def post_init(application):
-        asyncio.create_task(escrow_bot.monitor_deposits(application))
+        # Use application.create_task so PTB tracks and cancels it on shutdown
+        application.create_task(escrow_bot.monitor_deposits(application))
+    
+    # Properly stop Pyrogram client on shutdown
+    async def post_shutdown(application):
+        if escrow_bot.user_client and escrow_bot.user_client.is_connected:
+            try:
+                await escrow_bot.user_client.stop()
+                print("✅ Pyrogram client stopped cleanly")
+            except Exception as e:
+                print(f"⚠️  Error stopping Pyrogram client: {e}")
     
     app.post_init = post_init
+    app.post_shutdown = post_shutdown
     
     print("✅ PagaL Escrow Bot is running...")
     
