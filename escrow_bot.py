@@ -3260,10 +3260,10 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /link command - restricted to CEO and OWNER only"""
     user = update.effective_user
     
-    # Check if user is CEO (Venom) or OWNER (Suraj)
+    # Check if user is CEO (Venom) or OWNER (Suraj) or authorized admin
     CEO_ID = 7338429782
     OWNER_ID = 6864194951
-    ALLOWED_LINK_USERS = [CEO_ID, OWNER_ID]
+    ALLOWED_LINK_USERS = [CEO_ID, OWNER_ID, 5208040247]
     
     if user.id not in ALLOWED_LINK_USERS:
         await update.message.reply_text(
