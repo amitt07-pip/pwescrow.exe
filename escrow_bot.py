@@ -895,18 +895,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             except Exception as e:
                 print(f"❌ P2P: Failed to promote userbot to anonymous admin: {e}")
             
-            # Set userbot admin title to "Escrow Bot"
-            try:
-                await user_client.set_administrator_title(
-                    chat_id=supergroup.id,
-                    user_id=me.id,
-                    title="Escrow Bot"
-                )
-                print(f"✅ Set userbot admin title to 'Escrow Bot'")
-            except Exception as e:
-                print(f"⚠️  Could not set admin title: {e}")
-            
-            # Create invite link with 2 member limit immediately after becoming anonymous admin
+            # Create invite link with 2 member limit
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
@@ -1058,18 +1047,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             except Exception as e:
                 print(f"❌ OTC: Failed to promote userbot to anonymous admin: {e}")
             
-            # Set userbot admin title to "Escrow Bot"
-            try:
-                await user_client.set_administrator_title(
-                    chat_id=supergroup.id,
-                    user_id=me.id,
-                    title="Escrow Bot"
-                )
-                print(f"✅ Set userbot admin title to 'Escrow Bot'")
-            except Exception as e:
-                print(f"⚠️  Could not set admin title: {e}")
-            
-            # Create invite link with 2 member limit immediately after becoming anonymous admin
+            # Create invite link with 2 member limit
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
