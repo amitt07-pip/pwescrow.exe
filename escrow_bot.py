@@ -3510,8 +3510,11 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /blacklist command - admin only, globally blacklist a user from using the bot"""
     user = update.effective_user
     
+    print(f"🔍 /blacklist called by user {user.id if user else 'None'}, in ADMIN_IDS: {user.id in ADMIN_IDS if user else 'N/A'}")
+    
     # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
+        print(f"❌ /blacklist: User {user.id} not in ADMIN_IDS")
         return
     
     target_user_id = None
@@ -3620,8 +3623,11 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
     
+    print(f"🔍 /close called by user {user.id if user else 'None'}, in ADMIN_IDS: {user.id in ADMIN_IDS if user else 'N/A'}")
+    
     # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
+        print(f"❌ /close: User {user.id} not in ADMIN_IDS")
         return
     
     if chat.type not in ['group', 'supergroup']:
