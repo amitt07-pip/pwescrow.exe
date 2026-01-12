@@ -217,18 +217,20 @@ ESCROW_STATUS_STAGES = {
 }
 
 def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username="Not set", 
-                              deal_amount="Not set", group_type="P2P", current_status="Group Created"):
+                              deal_amount="Not set", group_type="P2P", current_status="Group Created",
+                              initiator_username="Not set"):
     """Build the escrow log message with current data"""
     return f"""<b>NEW ESCROW DEAL CREATED</b>
 
 🆔 <b>Chat ID:</b> <code>{chat_id}</code>
+👤 <b>Initiated by:</b> {initiator_username}
 👤 <b>Buyer:</b> {buyer_username}
 👤 <b>Seller:</b> {seller_username}
 💸 <b>Deal Amount:</b> {deal_amount}
 🔖 <b>Group Type:</b> {group_type}
 <b>Current Status:</b> {current_status}"""
 
-async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=None, seller_username=None, deal_amount=None):
+async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=None, seller_username=None, deal_amount=None, initiator_username=None):
     """Send initial escrow log to logs channel and store message ID"""
     if not LOGS_CHANNEL_ID:
         print(f"⚠️  LOGS_CHANNEL_ID not set - skipping escrow log for chat {chat_id}")
@@ -247,7 +249,8 @@ async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=Non
                 'deal_amount': deal_amount or 'Not set',
                 'group_type': group_type,
                 'current_status': 'Group Created',
-                'status_stage': 0
+                'status_stage': 0,
+                'initiator_username': initiator_username or 'Not set'
             }
         else:
             # Update with provided values if they exist
@@ -257,11 +260,14 @@ async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=Non
                 escrow_roles[chat_id]['log_data']['seller_username'] = seller_username
             if deal_amount:
                 escrow_roles[chat_id]['log_data']['deal_amount'] = deal_amount
+            if initiator_username:
+                escrow_roles[chat_id]['log_data']['initiator_username'] = initiator_username
         
         log_message = build_escrow_log_message(
             chat_id=chat_id,
             group_type=group_type,
-            current_status="Group Created"
+            current_status="Group Created",
+            initiator_username=escrow_roles[chat_id]['log_data'].get('initiator_username', 'Not set')
         )
         
         print(f"📤 Sending escrow log to channel {LOGS_CHANNEL_ID}...")
@@ -331,7 +337,8 @@ async def update_escrow_log(context, chat_id, new_status=None, buyer_username=No
         seller_username=log_data.get('seller_username', 'Not set'),
         deal_amount=log_data.get('deal_amount', 'Not set'),
         group_type=log_data.get('group_type', 'P2P'),
-        current_status=log_data.get('current_status', 'Group Created')
+        current_status=log_data.get('current_status', 'Group Created'),
+        initiator_username=log_data.get('initiator_username', 'Not set')
     )
     
     try:
@@ -632,7 +639,9 @@ Remember without it disputes wouldn't be resolved. Once filled proceed with Spec
     if chat_id not in escrow_roles or 'log_message_id' not in escrow_roles.get(chat_id, {}):
         # Determine group type based on chat title
         group_type = "OTC" if is_otc_group else "P2P"
-        await send_escrow_log(context, chat_id, group_type)
+        # Get initiator username from escrow_roles (stored when group was created)
+        initiator_username = escrow_roles.get(chat_id, {}).get('initiator_username', 'Not set')
+        await send_escrow_log(context, chat_id, group_type, initiator_username=initiator_username)
     
     # Update escrow log status to "Form Sent.."
     await update_escrow_log(context, chat_id, new_status="Form Sent..")
@@ -836,6 +845,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            # Store initiator username for logs
+            initiator_username = f"@{user.username}" if user.username else user.first_name
+            escrow_roles[bot_chat_id]['initiator_username'] = initiator_username
             
             # Promote bot to admin with full permissions
             await user_client.promote_chat_member(
@@ -984,6 +996,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            # Store initiator username for logs
+            initiator_username = f"@{user.username}" if user.username else user.first_name
+            escrow_roles[bot_chat_id]['initiator_username'] = initiator_username
             
             # Promote bot to admin with full permissions
             await user_client.promote_chat_member(
