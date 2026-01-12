@@ -866,22 +866,34 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin with full permissions
+            # Promote userbot to anonymous admin with full permissions
             me = await user_client.get_me()
-            await user_client.promote_chat_member(
-                chat_id=supergroup.id,
-                user_id=me.id,
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_pin_messages=True,
-                    can_invite_users=True,
-                    can_promote_members=True,
-                    can_restrict_members=True,
-                    can_change_info=True,
-                    is_anonymous=True
+            print(f"🔍 P2P: Promoting userbot {me.id} to anonymous admin in chat {supergroup.id}...")
+            try:
+                await user_client.promote_chat_member(
+                    chat_id=supergroup.id,
+                    user_id=me.id,
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_pin_messages=True,
+                        can_invite_users=True,
+                        can_promote_members=True,
+                        can_restrict_members=True,
+                        can_change_info=True,
+                        is_anonymous=True
+                    )
                 )
-            )
+                print(f"✅ P2P: Userbot {me.id} promoted to anonymous admin")
+                
+                # Verify the promotion worked
+                try:
+                    member_info = await user_client.get_chat_member(supergroup.id, me.id)
+                    print(f"🔍 P2P: Userbot status after promotion: {member_info.status}, privileges: {member_info.privileges}")
+                except Exception as ve:
+                    print(f"⚠️  P2P: Could not verify userbot status: {ve}")
+            except Exception as e:
+                print(f"❌ P2P: Failed to promote userbot to anonymous admin: {e}")
             
             # Set userbot admin title to "Escrow Bot"
             try:
@@ -1017,22 +1029,34 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin with full permissions
+            # Promote userbot to anonymous admin with full permissions
             me = await user_client.get_me()
-            await user_client.promote_chat_member(
-                chat_id=supergroup.id,
-                user_id=me.id,
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_pin_messages=True,
-                    can_invite_users=True,
-                    can_promote_members=True,
-                    can_restrict_members=True,
-                    can_change_info=True,
-                    is_anonymous=True
+            print(f"🔍 OTC: Promoting userbot {me.id} to anonymous admin in chat {supergroup.id}...")
+            try:
+                await user_client.promote_chat_member(
+                    chat_id=supergroup.id,
+                    user_id=me.id,
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_pin_messages=True,
+                        can_invite_users=True,
+                        can_promote_members=True,
+                        can_restrict_members=True,
+                        can_change_info=True,
+                        is_anonymous=True
+                    )
                 )
-            )
+                print(f"✅ OTC: Userbot {me.id} promoted to anonymous admin")
+                
+                # Verify the promotion worked
+                try:
+                    member_info = await user_client.get_chat_member(supergroup.id, me.id)
+                    print(f"🔍 OTC: Userbot status after promotion: {member_info.status}, privileges: {member_info.privileges}")
+                except Exception as ve:
+                    print(f"⚠️  OTC: Could not verify userbot status: {ve}")
+            except Exception as e:
+                print(f"❌ OTC: Failed to promote userbot to anonymous admin: {e}")
             
             # Set userbot admin title to "Escrow Bot"
             try:
