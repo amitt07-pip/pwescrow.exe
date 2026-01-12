@@ -4533,6 +4533,19 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
         print(f"👤 New member detected: {user_id} in chat {chat_id}")
         
         # Check if the user is in the admin list
+        # But skip if it's the userbot itself (to preserve its anonymous admin status)
+        userbot_id = None
+        if user_client and user_client.is_connected:
+            try:
+                me = await user_client.get_me()
+                userbot_id = me.id
+            except:
+                pass
+        
+        if user_id == userbot_id:
+            print(f"⏭️  Skipping auto-promotion for userbot {user_id} (already anonymous admin)")
+            return
+        
         if user_id in ADMIN_IDS:
             print(f"🔑 User {user_id} is in ADMIN_IDS, attempting promotion...")
             
