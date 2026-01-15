@@ -1495,11 +1495,15 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         if escrow_address in monitored_addresses:
             monitored_balance = monitored_addresses[escrow_address]['total_balance']
         
+        # Subtract baseline to get only deposits made after /deposit command
+        baseline_balance = escrow_roles[chat_id].get('baseline_balance', 0)
+        deal_balance = max(0, monitored_balance - baseline_balance)
+        
         # Get manually added balance (from /addbalance)
         manual_balance = escrow_roles[chat_id].get('balance', 0)
         
-        # Total balance = monitored + manual
-        current_balance = monitored_balance + manual_balance
+        # Total balance = deal deposits + manual
+        current_balance = deal_balance + manual_balance
         
         # Calculate time elapsed since deposit request
         last_deposit_time = escrow_roles[chat_id].get('last_deposit_time')
@@ -2865,7 +2869,11 @@ Amount Recieved: <code>{initial_balance:.5f}</code> <b><u>[{initial_balance:.2f}
         'last_check': datetime.now()
     }
     
-    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id} (initial balance: {initial_balance})")
+    # Store the baseline (historical balance) for this chat so we only show deposits made AFTER /deposit
+    # This prevents showing inflated balances from historical transactions on reused addresses
+    escrow_roles[chat_id]['baseline_balance'] = initial_balance
+    
+    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id} (baseline: {initial_balance})")
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command to show current escrow balance"""
@@ -2905,11 +2913,15 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if escrow_address in monitored_addresses:
         monitored_balance = monitored_addresses[escrow_address]['total_balance']
     
+    # Subtract baseline to get only deposits made after /deposit command
+    baseline_balance = escrow_roles[chat_id].get('baseline_balance', 0)
+    deal_balance = max(0, monitored_balance - baseline_balance)
+    
     # Get manually added balance (from /add or /addbalance commands)
     manual_balance = escrow_roles[chat_id].get('balance', 0)
     
-    # Total balance is monitored + manual
-    current_balance = monitored_balance + manual_balance
+    # Total balance = deal deposits + manual
+    current_balance = deal_balance + manual_balance
     
     # Format message: everything bold except amount (monospace) and USD value (bold in brackets)
     balance_message = f"<b>Current Escrow Balance is:</b> <code>{current_balance:.5f}</code>usdt <b>[{current_balance:.2f}$]</b>"
@@ -3104,6 +3116,11 @@ async def monitor_deposits(bot_app):
                 monitored_addresses[address]['total_balance'] = total_received
                 monitored_addresses[address]['last_seen_tx'] = transactions[0].get(tx_id_field)
                 
+                # Calculate deal-specific balance (subtract baseline to exclude historical deposits)
+                baseline_balance = escrow_roles.get(chat_id, {}).get('baseline_balance', 0)
+                manual_balance = escrow_roles.get(chat_id, {}).get('balance', 0)
+                deal_balance = max(0, total_received - baseline_balance) + manual_balance
+                
                 # Determine if OTC group for release/refund messages
                 try:
                     chat = await bot_app.bot.get_chat(chat_id=chat_id)
@@ -3137,12 +3154,12 @@ async def monitor_deposits(bot_app):
                     elif network == "TRON":
                         explorer_url = f"https://tronscan.org/#/address/{address}"
                 
-                # Send deposit confirmation message
+                # Send deposit confirmation message (use deal_balance which excludes historical deposits)
                 confirmation_message = f"""<b>Deposit 💵 has been confirmed</b>
 
 🪙 <b>Token:</b> {token_name}
 💰 <b>Amount:</b> {new_amount:.5f}[{new_amount:.2f}$]
-💸 <b>Balance:</b> {total_received:.5f}[{total_received:.2f}$]
+💸 <b>Balance:</b> {deal_balance:.5f}[{deal_balance:.2f}$]
 
 <b>Now you can proceed with the Deal✅
 
@@ -3172,10 +3189,10 @@ Useful commands:</b>
                         def __init__(self, bot):
                             self.bot = bot
                     mock_context = MockContext(bot_app.bot)
-                    # Update deal_amount to show current escrow balance (cumulative)
+                    # Update deal_amount to show current deal balance (excludes historical deposits)
                     await update_escrow_log(mock_context, chat_id, 
                         new_status="Deposit Detected", 
-                        deal_amount=f"{total_received:.5f} USDT",
+                        deal_amount=f"{deal_balance:.5f} USDT",
                         extra_info=f"{new_amount:.2f}")
                 except Exception as e:
                     print(f"Failed to send deposit notification: {e}")
