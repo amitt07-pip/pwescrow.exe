@@ -33,6 +33,11 @@ PHONE = os.getenv("TELEGRAM_PHONE", "")
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098,7422906767,7962772947,7338429782,8004116104,7715451354,8034627772,5208040247")
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip()]
 
+# Admin IDs excluded from auto-promotion in disputes (they won't be promoted when joining via dispute link)
+DISPUTE_EXCLUDE_IDS = {8034627772, 7338429782, 8004116104, 7090417617}
+# Admins who will be auto-promoted when joining via dispute link
+DISPUTE_ADMIN_IDS = [i for i in ADMIN_IDS if i not in DISPUTE_EXCLUDE_IDS]
+
 # Blockchain API keys
 BSCSCAN_API_KEY = os.getenv("BSCSCAN_API_KEY", "")
 TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "")
@@ -4642,8 +4647,8 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
             print(f"⏭️  Skipping auto-promotion for userbot {user_id} (already anonymous admin)")
             return
         
-        if user_id in ADMIN_IDS:
-            print(f"🔑 User {user_id} is in ADMIN_IDS, attempting promotion...")
+        if user_id in DISPUTE_ADMIN_IDS:
+            print(f"🔑 User {user_id} is in DISPUTE_ADMIN_IDS, attempting promotion...")
             
             # Ensure userbot is connected
             if not user_client:
