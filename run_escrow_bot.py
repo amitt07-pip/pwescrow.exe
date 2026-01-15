@@ -45,6 +45,7 @@ def main():
     app.add_handler(CommandHandler("link", escrow_bot.link_command))
     app.add_handler(CommandHandler("ban", escrow_bot.ban_command))
     app.add_handler(CommandHandler("blacklist", escrow_bot.blacklist_command))
+    app.add_handler(CommandHandler("whitelist", escrow_bot.whitelist_command))
     app.add_handler(CommandHandler("close", escrow_bot.close_command))
     app.add_handler(CommandHandler("verify", escrow_bot.verify_command))
     app.add_handler(CommandHandler("id", escrow_bot.id_command))

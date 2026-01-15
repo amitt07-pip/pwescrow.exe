@@ -3635,6 +3635,100 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
+async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /whitelist command - admin only, remove a user from the global blacklist"""
+    user = update.effective_user
+    
+    print(f"🔍 /whitelist called by user {user.id if user else 'None'}, in ADMIN_IDS: {user.id in ADMIN_IDS if user else 'N/A'}")
+    
+    # Check if user is an admin - silently ignore non-admins
+    if user.id not in ADMIN_IDS:
+        print(f"❌ /whitelist: User {user.id} not in ADMIN_IDS")
+        return
+    
+    target_user_id = None
+    target_display_name = None
+    
+    # Check if a username or user ID was provided as argument
+    if context.args and len(context.args) > 0:
+        username = context.args[0].strip()
+        # Remove @ prefix if present
+        if username.startswith('@'):
+            username = username[1:]
+        
+        # Check if it's a numeric user ID
+        if username.isdigit():
+            target_user_id = int(username)
+            target_display_name = f"<code>{target_user_id}</code>"
+        else:
+            # Try to get user from chat administrators if in a group
+            chat = update.effective_chat
+            if chat.type in ['group', 'supergroup']:
+                try:
+                    admins = await context.bot.get_chat_administrators(chat_id=chat.id)
+                    found = False
+                    for admin in admins:
+                        if admin.user.username and admin.user.username.lower() == username.lower():
+                            target_user_id = admin.user.id
+                            target_display_name = f"@{admin.user.username}"
+                            found = True
+                            break
+                    
+                    if not found:
+                        await update.message.reply_text(
+                            f"<b>❌ Could not find user @{username}.</b>\n\n"
+                            "<b>Tip:</b> Reply to their message and use <code>/whitelist</code> or use their numeric user ID.",
+                            parse_mode='HTML'
+                        )
+                        return
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"<b>❌ Failed to lookup user @{username}: {str(e)}</b>\n\n"
+                        "<b>Tip:</b> Reply to their message and use <code>/whitelist</code> or use their numeric user ID.",
+                        parse_mode='HTML'
+                    )
+                    return
+            else:
+                await update.message.reply_text(
+                    f"<b>❌ Cannot lookup username in DMs.</b>\n\n"
+                    "<b>Tip:</b> Use the numeric user ID instead: <code>/whitelist 123456789</code>",
+                    parse_mode='HTML'
+                )
+                return
+    # Check if this is a reply to another message
+    elif update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_display_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+    else:
+        await update.message.reply_text(
+            "<b>⚠️ Usage:</b>\n"
+            "• Reply to a message: <code>/whitelist</code>\n"
+            "• By username: <code>/whitelist @username</code>\n"
+            "• By user ID: <code>/whitelist 123456789</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if user is actually blacklisted
+    if target_user_id not in blacklisted_users:
+        await update.message.reply_text(
+            f"<b>⚠️ User {target_display_name} is not blacklisted.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Remove from blacklist and save to file
+    blacklisted_users.discard(target_user_id)
+    save_blacklist()
+    
+    await update.message.reply_text(
+        f"<b>✅ User {target_display_name} has been removed from the blacklist.</b>\n\n"
+        f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+        "<b>Note:</b> This user can now use the bot again.",
+        parse_mode='HTML'
+    )
+
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /close command - admin only, userbot joins via invite link and permanently deletes the group"""
     user = update.effective_user
@@ -4723,6 +4817,7 @@ def main():
     app.add_handler(CommandHandler("link", link_command))
     app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(CommandHandler("blacklist", blacklist_command))
+    app.add_handler(CommandHandler("whitelist", whitelist_command))
     app.add_handler(CommandHandler("verify", verify_command))
     app.add_handler(CommandHandler("release", release_command))
     app.add_handler(CommandHandler("refund", refund_command))
