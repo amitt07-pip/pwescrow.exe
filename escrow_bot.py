@@ -3641,14 +3641,14 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /whitelist command - admin only, remove a user from the global blacklist"""
+    """Handle /whitelist command - CEO/OWNER only, remove a user from the global blacklist"""
     user = update.effective_user
     
-    print(f"🔍 /whitelist called by user {user.id if user else 'None'}, in ADMIN_IDS: {user.id in ADMIN_IDS if user else 'N/A'}")
+    print(f"🔍 /whitelist called by user {user.id if user else 'None'}, CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID}")
     
-    # Check if user is an admin - silently ignore non-admins
-    if user.id not in ADMIN_IDS:
-        print(f"❌ /whitelist: User {user.id} not in ADMIN_IDS")
+    # Check if user is CEO or OWNER - silently ignore others
+    if user.id not in [CEO_ID, OWNER_ID]:
+        print(f"❌ /whitelist: User {user.id} not authorized (CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID})")
         return
     
     target_user_id = None
