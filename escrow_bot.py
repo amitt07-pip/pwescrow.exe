@@ -2700,7 +2700,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Alternate between two BSC addresses
                 bsc_addresses = [
-                    "0xDA4c2a5B876b0c7521e1c752690D8705080000fE",
+                    "0x3b168089dd40B4e6fEeaAab5603D4988CBbeae71",
                     "0xf282e789e835ed379aea84ece204d2d643e6774f"
                 ]
                 escrow_address = random.choice(bsc_addresses)
@@ -2712,7 +2712,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Alternate between two TRON addresses
                 tron_addresses = [
-                    "TVsTYwseYdRXUKk2ehcEcTT4UU3b2tqrVm",
+                    "TFMdprHZ3YLbZW8kNiuzi6bLsGXwG1J848",
                     "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"
                 ]
                 escrow_address = random.choice(tron_addresses)
@@ -2744,7 +2744,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif network == "BSC":
             # Alternate between two BSC addresses (same as USDT[BSC])
             bsc_addresses = [
-                "0xDA4c2a5B876b0c7521e1c752690D8705080000fE",
+                "0x3b168089dd40B4e6fEeaAab5603D4988CBbeae71",
                 "0xf282e789e835ed379aea84ece204d2d643e6774f"
             ]
             escrow_address = random.choice(bsc_addresses)
