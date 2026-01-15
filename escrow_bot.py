@@ -2736,7 +2736,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if network == "LTC":
             # Alternate between two LTC addresses
             ltc_addresses = [
-                "ltc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcq49h9x",
+                "ltc1q3pa3fe5fea95ml9axpr9ryspych4sjktcp3p3u",
                 "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"
             ]
             escrow_address = random.choice(ltc_addresses)
@@ -4353,7 +4353,7 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "bc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcyflnak",
         "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48",
         # LTC
-        "ltc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcq49h9x",
+        "ltc1q3pa3fe5fea95ml9axpr9ryspych4sjktcp3p3u",
         "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66",
         # Fake deposit addresses (for testing)
         "thb2do8gmweboctgaduh73q6ewxfcx9vx4"  # TRC20 test address
