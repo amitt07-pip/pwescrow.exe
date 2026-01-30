@@ -653,6 +653,7 @@ Remember without it disputes wouldn't be resolved. Once filled proceed with Spec
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks"""
+    global user_client, escrow_roles, monitored_addresses
     query = update.callback_query
     await query.answer()
     
@@ -2183,7 +2184,6 @@ Thank you for using @PagaLEscrowBot 🙌
         )
         
         # Ensure userbot is connected
-        global user_client, escrow_roles, monitored_addresses
         try:
             if not user_client:
                 user_client = Client(
