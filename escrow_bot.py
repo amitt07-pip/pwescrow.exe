@@ -2231,6 +2231,7 @@ Thank you for using @PagaLEscrowBot 🙌
         deleted_count = 0
         failed_count = 0
         left_count = 0
+        skipped_count = 0
         failed_chats = []
         
         for i, chat_id in enumerate(chat_ids):
@@ -2256,26 +2257,46 @@ Thank you for using @PagaLEscrowBot 🙌
                     if chat_id in escrow_roles:
                         del escrow_roles[chat_id]
                 except Exception as e2:
+                    error_str = str(e2).upper()
+                    if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str:
+                        skipped_count += 1
+                        print(f"⏭️ Skipped inaccessible group {chat_id}")
+                    else:
+                        try:
+                            await user_client.leave_chat(chat_id)
+                            left_count += 1
+                            print(f"👋 Left group {chat_id} (couldn't delete)")
+                        except Exception as e3:
+                            error_str3 = str(e3).upper()
+                            if "CHANNEL_PRIVATE" in error_str3 or "CHANNEL_INVALID" in error_str3 or "CHAT_FORBIDDEN" in error_str3:
+                                skipped_count += 1
+                                print(f"⏭️ Skipped inaccessible group {chat_id}")
+                            else:
+                                failed_count += 1
+                                failed_chats.append(chat_id)
+                                print(f"❌ Failed to delete/leave group {chat_id}: {e3}")
+                    
+            except Exception as e:
+                error_str = str(e).upper()
+                if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str:
+                    skipped_count += 1
+                    print(f"⏭️ Skipped inaccessible group {chat_id}")
+                else:
                     try:
                         await user_client.leave_chat(chat_id)
                         left_count += 1
-                        print(f"👋 Left group {chat_id} (couldn't delete)")
-                    except Exception as e3:
-                        failed_count += 1
-                        failed_chats.append(chat_id)
-                        print(f"❌ Failed to delete/leave group {chat_id}: {e3}")
-                    
-            except Exception as e:
-                try:
-                    await user_client.leave_chat(chat_id)
-                    left_count += 1
-                    if chat_id in escrow_roles:
-                        del escrow_roles[chat_id]
-                    print(f"👋 Left group {chat_id} (couldn't delete: {e})")
-                except Exception as e2:
-                    failed_count += 1
-                    failed_chats.append(chat_id)
-                    print(f"❌ Failed to delete/leave group {chat_id}: {e2}")
+                        if chat_id in escrow_roles:
+                            del escrow_roles[chat_id]
+                        print(f"👋 Left group {chat_id} (couldn't delete: {e})")
+                    except Exception as e2:
+                        error_str2 = str(e2).upper()
+                        if "CHANNEL_PRIVATE" in error_str2 or "CHANNEL_INVALID" in error_str2 or "CHAT_FORBIDDEN" in error_str2:
+                            skipped_count += 1
+                            print(f"⏭️ Skipped inaccessible group {chat_id}")
+                        else:
+                            failed_count += 1
+                            failed_chats.append(chat_id)
+                            print(f"❌ Failed to delete/leave group {chat_id}: {e2}")
             
             if (i + 1) % 5 == 0 or i == len(chat_ids) - 1:
                 try:
@@ -2284,6 +2305,7 @@ Thank you for using @PagaLEscrowBot 🙌
                         f"<b>Progress:</b> {i + 1}/{len(chat_ids)}\n"
                         f"<b>Deleted:</b> {deleted_count}\n"
                         f"<b>Left:</b> {left_count}\n"
+                        f"<b>Skipped:</b> {skipped_count}\n"
                         f"<b>Failed:</b> {failed_count}",
                         parse_mode='HTML'
                     )
@@ -2296,6 +2318,7 @@ Thank you for using @PagaLEscrowBot 🙌
         result_msg += f"<b>Total Groups:</b> {len(chat_ids)}\n"
         result_msg += f"<b>Deleted:</b> {deleted_count}\n"
         result_msg += f"<b>Left:</b> {left_count}\n"
+        result_msg += f"<b>Skipped:</b> {skipped_count}\n"
         result_msg += f"<b>Failed:</b> {failed_count}"
         
         if failed_chats:
