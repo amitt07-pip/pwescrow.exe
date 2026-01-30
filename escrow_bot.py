@@ -2167,6 +2167,155 @@ Thank you for using @PagaLEscrowBot 🙌
         )
         await query.answer(f"{chain_display} address saved!", show_alert=False)
     
+    elif query.data == "empty_confirm":
+        # Handle empty confirm button - CEO/OWNER only
+        user = query.from_user
+        if user.id not in [CEO_ID, OWNER_ID]:
+            await query.answer("You are not authorized to use this.", show_alert=True)
+            return
+        
+        await query.answer("Starting deletion process...")
+        
+        # Update message to show progress
+        await query.edit_message_text(
+            "<b>🔍 Fetching all groups...</b>",
+            parse_mode='HTML'
+        )
+        
+        # Ensure userbot is connected
+        global user_client, escrow_roles, monitored_addresses
+        try:
+            if not user_client:
+                user_client = Client(
+                    "escrow_user_session",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    phone_number=PHONE
+                )
+            
+            if not user_client.is_connected:
+                await user_client.start()
+        except Exception as e:
+            await query.edit_message_text(
+                f"<b>❌ Failed to connect userbot: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Get ALL groups/channels the userbot is in
+        chat_ids = []
+        try:
+            async for dialog in user_client.get_dialogs():
+                if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                    chat_ids.append(dialog.chat.id)
+        except Exception as e:
+            await query.edit_message_text(
+                f"<b>❌ Failed to fetch groups: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        if not chat_ids:
+            await query.edit_message_text(
+                "<b>No groups found.</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        await query.edit_message_text(
+            f"<b>🗑️ Deleting {len(chat_ids)} groups...</b>\n\n"
+            f"<b>Progress:</b> 0/{len(chat_ids)}",
+            parse_mode='HTML'
+        )
+        
+        deleted_count = 0
+        failed_count = 0
+        left_count = 0
+        failed_chats = []
+        
+        for i, chat_id in enumerate(chat_ids):
+            try:
+                await user_client.delete_supergroup(chat_id)
+                deleted_count += 1
+                
+                if chat_id in escrow_roles:
+                    del escrow_roles[chat_id]
+                
+                addresses_to_remove = [addr for addr, info in monitored_addresses.items() if info.get('chat_id') == chat_id]
+                for addr in addresses_to_remove:
+                    del monitored_addresses[addr]
+                
+                print(f"✅ Deleted group {chat_id}")
+                
+            except FloodWait as e:
+                print(f"⏳ FloodWait: waiting {e.value} seconds...")
+                await asyncio.sleep(e.value)
+                try:
+                    await user_client.delete_supergroup(chat_id)
+                    deleted_count += 1
+                    if chat_id in escrow_roles:
+                        del escrow_roles[chat_id]
+                except Exception as e2:
+                    try:
+                        await user_client.leave_chat(chat_id)
+                        left_count += 1
+                        print(f"👋 Left group {chat_id} (couldn't delete)")
+                    except Exception as e3:
+                        failed_count += 1
+                        failed_chats.append(chat_id)
+                        print(f"❌ Failed to delete/leave group {chat_id}: {e3}")
+                    
+            except Exception as e:
+                try:
+                    await user_client.leave_chat(chat_id)
+                    left_count += 1
+                    if chat_id in escrow_roles:
+                        del escrow_roles[chat_id]
+                    print(f"👋 Left group {chat_id} (couldn't delete: {e})")
+                except Exception as e2:
+                    failed_count += 1
+                    failed_chats.append(chat_id)
+                    print(f"❌ Failed to delete/leave group {chat_id}: {e2}")
+            
+            if (i + 1) % 5 == 0 or i == len(chat_ids) - 1:
+                try:
+                    await query.edit_message_text(
+                        f"<b>🗑️ Deleting groups...</b>\n\n"
+                        f"<b>Progress:</b> {i + 1}/{len(chat_ids)}\n"
+                        f"<b>Deleted:</b> {deleted_count}\n"
+                        f"<b>Left:</b> {left_count}\n"
+                        f"<b>Failed:</b> {failed_count}",
+                        parse_mode='HTML'
+                    )
+                except:
+                    pass
+            
+            await asyncio.sleep(0.5)
+        
+        result_msg = f"<b>🗑️ Empty Complete!</b>\n\n"
+        result_msg += f"<b>Total Groups:</b> {len(chat_ids)}\n"
+        result_msg += f"<b>Deleted:</b> {deleted_count}\n"
+        result_msg += f"<b>Left:</b> {left_count}\n"
+        result_msg += f"<b>Failed:</b> {failed_count}"
+        
+        if failed_chats:
+            result_msg += f"\n\n<b>Failed Chat IDs:</b>\n"
+            for chat_id in failed_chats[:10]:
+                result_msg += f"<code>{chat_id}</code>\n"
+            if len(failed_chats) > 10:
+                result_msg += f"... and {len(failed_chats) - 10} more"
+        
+        await query.edit_message_text(result_msg, parse_mode='HTML')
+        print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {left_count} left, {failed_count} failed")
+    
+    elif query.data == "empty_decline":
+        # Handle empty decline button
+        await query.answer("Operation cancelled.")
+        await query.edit_message_text(
+            "<b>❌ Empty operation cancelled.</b>",
+            parse_mode='HTML'
+        )
+    
     elif query.data == "back_to_start":
         welcome_message = """💫 @PagaLEscrowBot 💫
 Your Trustworthy Telegram Escrow Service
@@ -4529,10 +4678,12 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Check for confirmation
-    if not context.args or context.args[0].upper() != 'CONFIRM':
+    # Check for confirmation (via button callback or command argument)
+    is_confirmed = context.args and context.args[0].upper() == 'CONFIRM'
+    
+    if not is_confirmed:
         # Count ALL groups/channels the userbot is in
-        await update.message.reply_text(
+        counting_msg = await update.message.reply_text(
             "<b>🔍 Counting all groups the userbot is in...</b>",
             parse_mode='HTML'
         )
@@ -4543,17 +4694,26 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
                     group_count += 1
         except Exception as e:
-            await update.message.reply_text(
+            await counting_msg.edit_text(
                 f"<b>❌ Failed to count groups: {str(e)}</b>",
                 parse_mode='HTML'
             )
             return
         
-        await update.message.reply_text(
+        # Create Confirm and Decline buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data="empty_confirm"),
+                InlineKeyboardButton("❌ Decline", callback_data="empty_decline")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await counting_msg.edit_text(
             f"<b>⚠️ WARNING: This will delete ALL {group_count} groups the userbot is in!</b>\n\n"
-            f"<b>To confirm, use:</b> <code>/empty CONFIRM</code>\n\n"
             f"<b>This action cannot be undone!</b>",
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=reply_markup
         )
         return
     
