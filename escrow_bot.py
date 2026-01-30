@@ -2223,12 +2223,11 @@ Thank you for using @PagaLEscrowBot 🙌
             return
         
         await query.edit_message_text(
-            f"<b>🗑️ Deleting {len(chat_ids)} groups...</b>\n\n"
+            f"<b>🗑️ Leaving {len(chat_ids)} groups...</b>\n\n"
             f"<b>Progress:</b> 0/{len(chat_ids)}",
             parse_mode='HTML'
         )
         
-        deleted_count = 0
         failed_count = 0
         left_count = 0
         skipped_count = 0
@@ -2236,8 +2235,8 @@ Thank you for using @PagaLEscrowBot 🙌
         
         for i, chat_id in enumerate(chat_ids):
             try:
-                await user_client.delete_supergroup(chat_id)
-                deleted_count += 1
+                await user_client.leave_chat(chat_id)
+                left_count += 1
                 
                 if chat_id in escrow_roles:
                     del escrow_roles[chat_id]
@@ -2246,64 +2245,42 @@ Thank you for using @PagaLEscrowBot 🙌
                 for addr in addresses_to_remove:
                     del monitored_addresses[addr]
                 
-                print(f"✅ Deleted group {chat_id}")
+                print(f"👋 Left group {chat_id}")
                 
             except FloodWait as e:
                 print(f"⏳ FloodWait: waiting {e.value} seconds...")
                 await asyncio.sleep(e.value)
                 try:
-                    await user_client.delete_supergroup(chat_id)
-                    deleted_count += 1
+                    await user_client.leave_chat(chat_id)
+                    left_count += 1
                     if chat_id in escrow_roles:
                         del escrow_roles[chat_id]
+                    print(f"👋 Left group {chat_id} (after wait)")
                 except Exception as e2:
                     error_str = str(e2).upper()
-                    if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str:
+                    if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str or "USER_NOT_PARTICIPANT" in error_str:
                         skipped_count += 1
                         print(f"⏭️ Skipped inaccessible group {chat_id}")
                     else:
-                        try:
-                            await user_client.leave_chat(chat_id)
-                            left_count += 1
-                            print(f"👋 Left group {chat_id} (couldn't delete)")
-                        except Exception as e3:
-                            error_str3 = str(e3).upper()
-                            if "CHANNEL_PRIVATE" in error_str3 or "CHANNEL_INVALID" in error_str3 or "CHAT_FORBIDDEN" in error_str3:
-                                skipped_count += 1
-                                print(f"⏭️ Skipped inaccessible group {chat_id}")
-                            else:
-                                failed_count += 1
-                                failed_chats.append(chat_id)
-                                print(f"❌ Failed to delete/leave group {chat_id}: {e3}")
+                        failed_count += 1
+                        failed_chats.append(chat_id)
+                        print(f"❌ Failed to leave group {chat_id}: {e2}")
                     
             except Exception as e:
                 error_str = str(e).upper()
-                if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str:
+                if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str or "USER_NOT_PARTICIPANT" in error_str:
                     skipped_count += 1
                     print(f"⏭️ Skipped inaccessible group {chat_id}")
                 else:
-                    try:
-                        await user_client.leave_chat(chat_id)
-                        left_count += 1
-                        if chat_id in escrow_roles:
-                            del escrow_roles[chat_id]
-                        print(f"👋 Left group {chat_id} (couldn't delete: {e})")
-                    except Exception as e2:
-                        error_str2 = str(e2).upper()
-                        if "CHANNEL_PRIVATE" in error_str2 or "CHANNEL_INVALID" in error_str2 or "CHAT_FORBIDDEN" in error_str2:
-                            skipped_count += 1
-                            print(f"⏭️ Skipped inaccessible group {chat_id}")
-                        else:
-                            failed_count += 1
-                            failed_chats.append(chat_id)
-                            print(f"❌ Failed to delete/leave group {chat_id}: {e2}")
+                    failed_count += 1
+                    failed_chats.append(chat_id)
+                    print(f"❌ Failed to leave group {chat_id}: {e}")
             
             if (i + 1) % 5 == 0 or i == len(chat_ids) - 1:
                 try:
                     await query.edit_message_text(
-                        f"<b>🗑️ Deleting groups...</b>\n\n"
+                        f"<b>🗑️ Leaving groups...</b>\n\n"
                         f"<b>Progress:</b> {i + 1}/{len(chat_ids)}\n"
-                        f"<b>Deleted:</b> {deleted_count}\n"
                         f"<b>Left:</b> {left_count}\n"
                         f"<b>Skipped:</b> {skipped_count}\n"
                         f"<b>Failed:</b> {failed_count}",
@@ -2312,11 +2289,10 @@ Thank you for using @PagaLEscrowBot 🙌
                 except:
                     pass
             
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
         
         result_msg = f"<b>🗑️ Empty Complete!</b>\n\n"
         result_msg += f"<b>Total Groups:</b> {len(chat_ids)}\n"
-        result_msg += f"<b>Deleted:</b> {deleted_count}\n"
         result_msg += f"<b>Left:</b> {left_count}\n"
         result_msg += f"<b>Skipped:</b> {skipped_count}\n"
         result_msg += f"<b>Failed:</b> {failed_count}"
