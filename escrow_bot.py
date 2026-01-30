@@ -4502,7 +4502,7 @@ async def globalfee_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /empty command - delete all userbot-created groups (CEO/OWNER only)"""
+    """Handle /empty command - delete ALL groups/channels the userbot is in (CEO/OWNER only)"""
     global user_client, escrow_roles, monitored_addresses
     user = update.effective_user
     
@@ -4510,36 +4510,7 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in [CEO_ID, OWNER_ID]:
         return  # Silent fail for non-authorized users
     
-    # Check for confirmation
-    if not context.args or context.args[0].upper() != 'CONFIRM':
-        # Count active groups
-        group_count = len(escrow_roles)
-        await update.message.reply_text(
-            f"<b>⚠️ WARNING: This will delete ALL {group_count} escrow groups!</b>\n\n"
-            f"<b>To confirm, use:</b> <code>/empty CONFIRM</code>\n\n"
-            f"<b>This action cannot be undone!</b>",
-            parse_mode='HTML'
-        )
-        return
-    
-    # Get list of chat IDs to delete
-    chat_ids = list(escrow_roles.keys())
-    
-    if not chat_ids:
-        await update.message.reply_text(
-            "<b>No active escrow groups found.</b>",
-            parse_mode='HTML'
-        )
-        return
-    
-    # Send initial status message
-    status_msg = await update.message.reply_text(
-        f"<b>🗑️ Deleting {len(chat_ids)} groups...</b>\n\n"
-        f"<b>Progress:</b> 0/{len(chat_ids)}",
-        parse_mode='HTML'
-    )
-    
-    # Ensure userbot is connected
+    # Ensure userbot is connected first to count groups
     try:
         if not user_client:
             user_client = Client(
@@ -4552,14 +4523,75 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not user_client.is_connected:
             await user_client.start()
     except Exception as e:
-        await status_msg.edit_text(
+        await update.message.reply_text(
             f"<b>❌ Failed to connect userbot: {str(e)}</b>",
             parse_mode='HTML'
         )
         return
     
+    # Check for confirmation
+    if not context.args or context.args[0].upper() != 'CONFIRM':
+        # Count ALL groups/channels the userbot is in
+        await update.message.reply_text(
+            "<b>🔍 Counting all groups the userbot is in...</b>",
+            parse_mode='HTML'
+        )
+        
+        group_count = 0
+        try:
+            async for dialog in user_client.get_dialogs():
+                if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                    group_count += 1
+        except Exception as e:
+            await update.message.reply_text(
+                f"<b>❌ Failed to count groups: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        await update.message.reply_text(
+            f"<b>⚠️ WARNING: This will delete ALL {group_count} groups the userbot is in!</b>\n\n"
+            f"<b>To confirm, use:</b> <code>/empty CONFIRM</code>\n\n"
+            f"<b>This action cannot be undone!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Send initial status message
+    status_msg = await update.message.reply_text(
+        "<b>🔍 Fetching all groups...</b>",
+        parse_mode='HTML'
+    )
+    
+    # Get ALL groups/channels the userbot is in
+    chat_ids = []
+    try:
+        async for dialog in user_client.get_dialogs():
+            if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                chat_ids.append(dialog.chat.id)
+    except Exception as e:
+        await status_msg.edit_text(
+            f"<b>❌ Failed to fetch groups: {str(e)}</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    if not chat_ids:
+        await status_msg.edit_text(
+            "<b>No groups found.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    await status_msg.edit_text(
+        f"<b>🗑️ Deleting {len(chat_ids)} groups...</b>\n\n"
+        f"<b>Progress:</b> 0/{len(chat_ids)}",
+        parse_mode='HTML'
+    )
+    
     deleted_count = 0
     failed_count = 0
+    left_count = 0
     failed_chats = []
     
     for i, chat_id in enumerate(chat_ids):
@@ -4568,7 +4600,7 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await user_client.delete_supergroup(chat_id)
             deleted_count += 1
             
-            # Remove from escrow_roles
+            # Remove from escrow_roles if exists
             if chat_id in escrow_roles:
                 del escrow_roles[chat_id]
             
@@ -4581,6 +4613,7 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         except FloodWait as e:
             # Handle rate limiting
+            print(f"⏳ FloodWait: waiting {e.value} seconds...")
             await asyncio.sleep(e.value)
             try:
                 await user_client.delete_supergroup(chat_id)
@@ -4588,14 +4621,28 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if chat_id in escrow_roles:
                     del escrow_roles[chat_id]
             except Exception as e2:
-                failed_count += 1
-                failed_chats.append(chat_id)
-                print(f"❌ Failed to delete group {chat_id}: {e2}")
+                # If delete fails, try to leave the group instead
+                try:
+                    await user_client.leave_chat(chat_id)
+                    left_count += 1
+                    print(f"👋 Left group {chat_id} (couldn't delete)")
+                except Exception as e3:
+                    failed_count += 1
+                    failed_chats.append(chat_id)
+                    print(f"❌ Failed to delete/leave group {chat_id}: {e3}")
                 
         except Exception as e:
-            failed_count += 1
-            failed_chats.append(chat_id)
-            print(f"❌ Failed to delete group {chat_id}: {e}")
+            # If delete fails, try to leave the group instead
+            try:
+                await user_client.leave_chat(chat_id)
+                left_count += 1
+                if chat_id in escrow_roles:
+                    del escrow_roles[chat_id]
+                print(f"👋 Left group {chat_id} (couldn't delete: {e})")
+            except Exception as e2:
+                failed_count += 1
+                failed_chats.append(chat_id)
+                print(f"❌ Failed to delete/leave group {chat_id}: {e2}")
         
         # Update progress every 5 groups
         if (i + 1) % 5 == 0 or i == len(chat_ids) - 1:
@@ -4604,6 +4651,7 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"<b>🗑️ Deleting groups...</b>\n\n"
                     f"<b>Progress:</b> {i + 1}/{len(chat_ids)}\n"
                     f"<b>Deleted:</b> {deleted_count}\n"
+                    f"<b>Left:</b> {left_count}\n"
                     f"<b>Failed:</b> {failed_count}",
                     parse_mode='HTML'
                 )
@@ -4617,6 +4665,7 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result_msg = f"<b>🗑️ Empty Complete!</b>\n\n"
     result_msg += f"<b>Total Groups:</b> {len(chat_ids)}\n"
     result_msg += f"<b>Deleted:</b> {deleted_count}\n"
+    result_msg += f"<b>Left:</b> {left_count}\n"
     result_msg += f"<b>Failed:</b> {failed_count}"
     
     if failed_chats:
@@ -4627,7 +4676,7 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result_msg += f"... and {len(failed_chats) - 10} more"
     
     await status_msg.edit_text(result_msg, parse_mode='HTML')
-    print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {failed_count} failed")
+    print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {left_count} left, {failed_count} failed")
 
 async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Track when members join and auto-promote admins using userbot"""
