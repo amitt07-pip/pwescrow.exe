@@ -635,7 +635,9 @@ Conditions (if any) -</code>
 
 Remember without it disputes wouldn't be resolved. Once filled proceed with Specifications of the seller or buyer with /seller or /buyer <b>[CRYPTO ADDRESS]</b>"""
     
-    await update.message.reply_text(dd_message, parse_mode='HTML')
+    keyboard = [[InlineKeyboardButton("How To Use Bot ❔", url="https://t.me/how_to_use_pagalescrowbot")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(dd_message, parse_mode='HTML', reply_markup=reply_markup)
     
     # Set flag to capture deal details from next message
     awaiting_deal_details[chat_id] = {'is_otc': is_otc_group}
