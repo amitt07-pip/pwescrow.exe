@@ -2871,7 +2871,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 # Alternate between two TRON addresses (Amit address)
                 tron_addresses = [
-                    "THdf4TT8cwdNaZG2hSgqbB52fAtFWRRiU2",  # Amit address
+                    "TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR",  # Amit address
                     "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"
                 ]
                 escrow_address = random.choice(tron_addresses)
@@ -4519,7 +4519,7 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "0xda4c2a5b876b0c7521e1c752690d8705080000fe",
         "0xf282e789e835ed379aea84ece204d2d643e6774f",
         # USDT TRON
-        "tvstywseydrxukk2ehcectt4uu3b2tqrvm",
+        "tdayz8pb1mnfxpywhdgrhwa3zkwwxb3wdr",
         "txfytrl3vau3dje6kyxqueazoscn8drrhb",
         # BTC
         "bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn",
