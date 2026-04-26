@@ -4522,7 +4522,7 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "tvstywseydrxukk2ehcectt4uu3b2tqrvm",
         "txfytrl3vau3dje6kyxqueazoscn8drrhb",
         # BTC
-        "bc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcyflnak",
+        "bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn",
         "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48",
         # LTC
         "ltc1q3pa3fe5fea95ml9axpr9ryspych4sjktcp3p3u",
