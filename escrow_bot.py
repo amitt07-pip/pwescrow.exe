@@ -2857,12 +2857,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if fake_deposit_enabled and fake_deposit_network == "BSC":
                 escrow_address = fake_deposit_address
             else:
-                # Alternate between two BSC addresses (Amit address)
-                bsc_addresses = [
-                    "0x9b4F87471a1648CAA3Cf8D87594a8eE321077FF7",  # Amit address
-                    "0xf282e789e835ed379aea84ece204d2d643e6774f"
-                ]
-                escrow_address = random.choice(bsc_addresses)
+                escrow_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
             network_label = "BSC"
         elif network == "TRON":
             # Check if fakedepo is enabled for TRON
@@ -2901,12 +2896,7 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             escrow_address = random.choice(ltc_addresses)
             network_label = "LTC"
         elif network == "BSC":
-            # Alternate between two BSC addresses (same as USDT[BSC])
-            bsc_addresses = [
-                "0x3b168089dd40B4e6fEeaAab5603D4988CBbeae71",
-                "0xf282e789e835ed379aea84ece204d2d643e6774f"
-            ]
-            escrow_address = random.choice(bsc_addresses)
+            escrow_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
             network_label = "BSC"
         else:
             await update.message.reply_text("⚠️ Unsupported network for LTC.")
@@ -4517,9 +4507,7 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_addresses = {
         # USDT BSC
         "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",
-        "0x9b4f87471a1648caa3cf8d87594a8ee321077ff7",
         "0xf282e789e835ed379aea84ece204d2d643e6774f",
-        "0x3b168089dd40b4e6feeaaab5603d4988cbbeae71",
         # USDT TRON
         "tdayz8pb1mnfxpywhdgrhwa3zkwwxb3wdr",
         "txfytrl3vau3dje6kyxqueazoscn8drrhb",
