@@ -4517,6 +4517,9 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_addresses = {
         # USDT BSC
         "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",
+        "0x9b4f87471a1648caa3cf8d87594a8ee321077ff7",
+        "0xf282e789e835ed379aea84ece204d2d643e6774f",
+        "0x3b168089dd40b4e6feeaaab5603d4988cbbeae71",
         # USDT TRON
         "tdayz8pb1mnfxpywhdgrhwa3zkwwxb3wdr",
         "txfytrl3vau3dje6kyxqueazoscn8drrhb",
@@ -4527,7 +4530,8 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz",
         "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66",
         # Fake deposit addresses (for testing)
-        "thb2do8gmweboctgaduh73q6ewxfcx9vx4"  # TRC20 test address
+        "thb2do8gmweboctgaduh73q6ewxfcx9vx4",  # TRC20 test address
+        "0x4de23f3f0fb3318287378abdde030cf61714b2f3"  # BEP20 test address
     }
     
     # Check if the provided address matches any bot address (case-insensitive)
