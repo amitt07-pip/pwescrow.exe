@@ -54,6 +54,7 @@ def main():
     app.add_handler(CommandHandler("globalfee", escrow_bot.globalfee_command))
     app.add_handler(CommandHandler("save", escrow_bot.save_command))
     app.add_handler(CommandHandler("empty", escrow_bot.empty_command))
+    app.add_handler(CommandHandler("setaddy", escrow_bot.setaddy_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
     app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
