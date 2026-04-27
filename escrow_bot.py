@@ -2371,19 +2371,6 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     using_saved_address = False
     
-    # Check if user is already the seller in this chat (prevent role switching)
-    if chat_id in escrow_roles and 'seller' in escrow_roles[chat_id]:
-        if escrow_roles[chat_id]['seller']['user_id'] == user_id:
-            # User is already the seller - check if they provided an address
-            if context.args and len(context.args) > 0:
-                # With address - block with error message
-                await update.message.reply_text(
-                    "<b>Sorry! you are not allowed to use this command!</b>",
-                    parse_mode='HTML'
-                )
-                return
-            # Without address - continue to show normal image (fall through to existing logic)
-    
     if not context.args or len(context.args) == 0:
         # Check if user has a saved address (check all chains)
         if user_id in saved_addresses and saved_addresses[user_id]:
@@ -2554,19 +2541,6 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if command has arguments (crypto address)
     user_id = user.id
     using_saved_address = False
-    
-    # Check if user is already the buyer in this chat (prevent role switching)
-    if chat_id in escrow_roles and 'buyer' in escrow_roles[chat_id]:
-        if escrow_roles[chat_id]['buyer']['user_id'] == user_id:
-            # User is already the buyer - check if they provided an address
-            if context.args and len(context.args) > 0:
-                # With address - block with error message
-                await update.message.reply_text(
-                    "<b>Sorry! you are not allowed to use this command!</b>",
-                    parse_mode='HTML'
-                )
-                return
-            # Without address - continue to show normal image (fall through to existing logic)
     
     if not context.args or len(context.args) == 0:
         # Check if user has a saved address (check all chains)
