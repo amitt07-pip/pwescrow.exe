@@ -1312,22 +1312,21 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 f"<b>Always use @PagaLEscrowBot to stay secured ✅</b>"
             )
             
-            # Send invite message in the source chat
+            # Edit the "Creating safe trading place..." message to show the invite format
             source_chat_id = pending['source_chat_id']
-            sent_invite = await context.bot.send_message(
-                chat_id=source_chat_id,
-                text=invite_message_text,
+            await query.edit_message_text(
+                invite_message_text,
                 parse_mode='HTML',
                 disable_web_page_preview=True
             )
             
-            # Store direct escrow tracking info
+            # Store direct escrow tracking info (use the edited message for tracking)
             direct_escrow_pending[bot_chat_id] = {
                 'initiator_id': pending['initiator_id'],
                 'counterparty_id': pending.get('counterparty_id'),
                 'initiator_username': initiator_username,
                 'counterparty_username': counterparty_username,
-                'invite_message_id': sent_invite.message_id,
+                'invite_message_id': query.message.message_id,
                 'invite_chat_id': source_chat_id,
                 'joined': set(),
                 'supergroup_id': supergroup.id
@@ -1335,13 +1334,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Clean up pending selection
             del direct_escrow_selection[user.id]
-            
-            # Edit the original message to confirm
-            await query.edit_message_text(
-                f"<b>✅ {escrow_type} Escrow group created for {initiator_username} &amp; {counterparty_username}.</b>\n\n"
-                f"<b>Invite link sent below. Only approved users can join.</b>",
-                parse_mode='HTML'
-            )
             
         except FloodWait as e:
             await query.edit_message_text(f"⏳ Rate limit hit. Please wait {e.value} seconds and try again.")
