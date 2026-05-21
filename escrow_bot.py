@@ -2582,15 +2582,30 @@ Thank you for using @PagaLEscrowBot 🙌
             parse_mode='HTML'
         )
     
-    elif query.data == "mystats_increase":
-        user_id = query.from_user.id
+    elif query.data == "mystats_increase" or query.data.startswith("mystats_increase_"):
+        caller_id = query.from_user.id
         await query.answer()
-        awaiting_stats_increase[user_id] = True
-        await query.edit_message_text(
-            "<b>How much do you want to increase your stats by?</b>\n\n"
-            "Send the amount (e.g. <code>500</code> or <code>1250.50</code>)",
-            parse_mode='HTML'
-        )
+        
+        if query.data == "mystats_increase":
+            # User increasing own stats
+            awaiting_stats_increase[caller_id] = caller_id
+            await query.edit_message_text(
+                "<b>How much do you want to increase your stats by?</b>\n\n"
+                "Send the amount (e.g. <code>500</code> or <code>1250.50</code>)",
+                parse_mode='HTML'
+            )
+        else:
+            # Admin increasing another user's stats
+            if caller_id not in ADMIN_IDS:
+                await query.answer("Not authorized!", show_alert=True)
+                return
+            target_user_id = int(query.data.replace("mystats_increase_", ""))
+            awaiting_stats_increase[caller_id] = target_user_id
+            await query.edit_message_text(
+                f"<b>How much do you want to increase stats for user <code>{target_user_id}</code>?</b>\n\n"
+                "Send the amount (e.g. <code>500</code> or <code>1250.50</code>)",
+                parse_mode='HTML'
+            )
     
     elif query.data.startswith("setaddy_"):
         # Handle setaddy callback - CEO only
@@ -5041,25 +5056,77 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /mystats command - show user's deal stats with option to increase"""
+    """Handle /mystats command - show user's deal stats with option to increase.
+    Admins can use /mystats @username or /mystats user_id to view/increase another user's stats."""
     if await check_blacklist(update, context):
         return
     
     user = update.effective_user
-    user_id = user.id
-    current_stats = user_deal_stats.get(user_id, 0.0)
+    is_admin = user.id in ADMIN_IDS
     
-    keyboard = [
-        [InlineKeyboardButton("Increase", callback_data="mystats_increase")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # Check if admin is querying another user's stats
+    target_user_id = None
+    target_display = None
+    if context.args and len(context.args) >= 1 and is_admin:
+        target_arg = context.args[0].strip()
+        if target_arg.startswith("@"):
+            # Resolve username to user_id
+            try:
+                username_clean = target_arg.lstrip("@")
+                if user_client:
+                    if not user_client.is_connected:
+                        await user_client.start()
+                    resolved = await user_client.get_users(username_clean)
+                    target_user_id = resolved.id
+                    target_display = target_arg
+            except Exception as e:
+                await update.message.reply_text(
+                    f"<b>Could not resolve user {target_arg}</b>",
+                    parse_mode='HTML'
+                )
+                return
+        else:
+            try:
+                target_user_id = int(target_arg)
+                try:
+                    cp_chat = await context.bot.get_chat(target_user_id)
+                    target_display = f"@{cp_chat.username}" if cp_chat.username else cp_chat.first_name
+                except Exception:
+                    target_display = str(target_user_id)
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>Invalid format. Use:</b> /mystats @username <b>or</b> /mystats [user_id]",
+                    parse_mode='HTML'
+                )
+                return
     
-    await update.message.reply_text(
-        f"<b>Your Deal Stats</b>\n\n"
-        f"<b>Lifetime Volume:</b> ${current_stats:.2f}",
-        parse_mode='HTML',
-        reply_markup=reply_markup
-    )
+    if target_user_id:
+        # Admin viewing another user's stats
+        current_stats = user_deal_stats.get(target_user_id, 0.0)
+        keyboard = [
+            [InlineKeyboardButton("Increase", callback_data=f"mystats_increase_{target_user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"<b>Deal Stats for {target_display}</b>\n\n"
+            f"<b>User ID:</b> <code>{target_user_id}</code>\n"
+            f"<b>Lifetime Volume:</b> ${current_stats:.2f}",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    else:
+        # User viewing own stats
+        current_stats = user_deal_stats.get(user.id, 0.0)
+        keyboard = [
+            [InlineKeyboardButton("Increase", callback_data="mystats_increase")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"<b>Your Deal Stats</b>\n\n"
+            f"<b>Lifetime Volume:</b> ${current_stats:.2f}",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
 
 async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /save command - save user's crypto address for a specific chain"""
@@ -5532,24 +5599,33 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
         return
     
     # Handle stats increase input
-    user_id = update.effective_user.id
-    if user_id in awaiting_stats_increase:
+    caller_id = update.effective_user.id
+    if caller_id in awaiting_stats_increase:
+        target_user_id = awaiting_stats_increase[caller_id]
         message_text = update.message.text or ""
         try:
             amount = float(message_text.strip())
             if amount <= 0:
                 await update.message.reply_text("<b>Please enter a positive amount.</b>", parse_mode='HTML')
                 return
-            current = user_deal_stats.get(user_id, 0.0)
-            user_deal_stats[user_id] = current + amount
+            current = user_deal_stats.get(target_user_id, 0.0)
+            user_deal_stats[target_user_id] = current + amount
             save_user_deal_stats()
-            del awaiting_stats_increase[user_id]
-            await update.message.reply_text(
-                f"<b>Stats updated!</b>\n\n"
-                f"<b>Added:</b> ${amount:.2f}\n"
-                f"<b>New Lifetime Volume:</b> ${user_deal_stats[user_id]:.2f}",
-                parse_mode='HTML'
-            )
+            del awaiting_stats_increase[caller_id]
+            if target_user_id == caller_id:
+                await update.message.reply_text(
+                    f"<b>Stats updated!</b>\n\n"
+                    f"<b>Added:</b> ${amount:.2f}\n"
+                    f"<b>New Lifetime Volume:</b> ${user_deal_stats[target_user_id]:.2f}",
+                    parse_mode='HTML'
+                )
+            else:
+                await update.message.reply_text(
+                    f"<b>Stats updated for user <code>{target_user_id}</code>!</b>\n\n"
+                    f"<b>Added:</b> ${amount:.2f}\n"
+                    f"<b>New Lifetime Volume:</b> ${user_deal_stats[target_user_id]:.2f}",
+                    parse_mode='HTML'
+                )
         except ValueError:
             await update.message.reply_text("<b>Please send a valid number.</b>", parse_mode='HTML')
         return
