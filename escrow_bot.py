@@ -4,7 +4,7 @@ if sys.version_info >= (3, 13):
     sys.modules["imghdr"] = types.ModuleType("imghdr")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, filters
 from pyrogram import Client, enums
 from pyrogram.errors import FloodWait
 from pyrogram.types import ChatPrivileges
@@ -86,6 +86,12 @@ save_pending = {}
 
 # Track chats awaiting deal details after /dd command {chat_id: {'is_otc': bool}}
 awaiting_deal_details = {}
+
+# Track direct escrow requests: {chat_id: {'initiator_id': ..., 'counterparty_id': ..., 'initiator_username': ..., 'counterparty_username': ..., 'invite_message_id': ..., 'invite_chat_id': ..., 'joined': set()}}
+direct_escrow_pending = {}
+
+# Pending direct escrow type selection: {user_id: {'counterparty_username': ..., 'counterparty_id': ..., 'initiator_username': ..., 'initiator_id': ..., 'source_chat_id': ...}}
+direct_escrow_selection = {}
 
 # CEO and OWNER IDs for restricted commands
 CEO_ID = 7338429782
@@ -488,9 +494,74 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
     await update.message.reply_text(welcome_message, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=reply_markup)
 
 async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /escrow command - show escrow type selection"""
+    """Handle /escrow command - show escrow type selection, or direct escrow with /escrow @username"""
     # Check if user is blacklisted
     if await check_blacklist(update, context):
+        return
+    
+    # Check if a counterparty username/user_id was provided
+    if context.args and len(context.args) >= 1:
+        initiator = update.effective_user
+        initiator_username = f"@{initiator.username}" if initiator.username else initiator.first_name
+        counterparty_arg = context.args[0].strip()
+        
+        # Resolve counterparty: could be @username or user_id
+        counterparty_username = None
+        counterparty_id = None
+        
+        if counterparty_arg.startswith("@"):
+            counterparty_username = counterparty_arg
+        else:
+            try:
+                counterparty_id = int(counterparty_arg)
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>Invalid format. Use:</b> /escrow @username <b>or</b> /escrow [user_id]",
+                    parse_mode='HTML'
+                )
+                return
+        
+        # Try to resolve user info if we have an ID but no username
+        if counterparty_id and not counterparty_username:
+            try:
+                cp_chat = await context.bot.get_chat(counterparty_id)
+                counterparty_username = f"@{cp_chat.username}" if cp_chat.username else cp_chat.first_name
+            except Exception:
+                counterparty_username = str(counterparty_id)
+        
+        # Try to resolve counterparty ID from username
+        if counterparty_username and not counterparty_id:
+            try:
+                username_clean = counterparty_username.lstrip("@")
+                if user_client:
+                    if not user_client.is_connected:
+                        await user_client.start()
+                    cp_user = await user_client.get_users(username_clean)
+                    counterparty_id = cp_user.id
+            except Exception as e:
+                print(f"Could not resolve counterparty ID from username {counterparty_username}: {e}")
+        
+        # Store pending selection
+        direct_escrow_selection[initiator.id] = {
+            'counterparty_username': counterparty_username,
+            'counterparty_id': counterparty_id,
+            'initiator_username': initiator_username,
+            'initiator_id': initiator.id,
+            'source_chat_id': update.effective_chat.id
+        }
+        
+        keyboard = [
+            [InlineKeyboardButton("P2P", callback_data="escrow_direct_p2p"),
+             InlineKeyboardButton("Product Deal", callback_data="escrow_direct_product")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"<b>Starting escrow with {counterparty_username}</b>\n\n"
+            f"Please select your escrow type from below.",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
         return
     
     keyboard = [
@@ -1103,6 +1174,176 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
 <blockquote>⚠️ Note: This link is for 2 members only—third parties are not allowed to join.</blockquote>"""
             
             await query.edit_message_text(success_message, parse_mode='HTML')
+            
+        except FloodWait as e:
+            await query.edit_message_text(f"⏳ Rate limit hit. Please wait {e.value} seconds and try again.")
+        except Exception as e:
+            error_message = f"❌ Failed to create escrow group.\n\nPlease try again or contact support.\n\nError: {str(e)}"
+            await query.edit_message_text(error_message)
+    
+    elif query.data in ("escrow_direct_p2p", "escrow_direct_product"):
+        # Handle direct escrow group creation with counterparty
+        if await check_blacklist(update, context):
+            return
+        
+        await query.answer()
+        
+        user = query.from_user
+        pending = direct_escrow_selection.get(user.id)
+        if not pending:
+            await query.edit_message_text("<b>Session expired. Please use /escrow @username again.</b>", parse_mode='HTML')
+            return
+        
+        is_p2p = query.data == "escrow_direct_p2p"
+        escrow_type = "P2P" if is_p2p else "OTC"
+        group_name = f"{escrow_type} Escrow By PAGAL Bot"
+        
+        await query.edit_message_text(f"<b>Creating a safe {escrow_type} trading place for you, please wait...</b>", parse_mode='HTML')
+        
+        if not user_client:
+            await query.edit_message_text("❌ Group creation is not configured. Please contact the bot administrator.")
+            return
+        
+        try:
+            if not user_client.is_connected:
+                await user_client.start()
+            
+            random_number = random.randint(90000000, 99999999)
+            
+            # Create supergroup
+            supergroup = await user_client.create_supergroup(
+                title=group_name,
+                description=""
+            )
+            
+            # Add the bot to the group
+            bot_username = (await context.bot.get_me()).username
+            await user_client.add_chat_members(supergroup.id, bot_username)
+            
+            # Convert supergroup ID
+            supergroup_id_str = str(supergroup.id)
+            if supergroup_id_str.startswith("-100"):
+                bot_chat_id = supergroup.id
+            else:
+                bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            
+            if bot_chat_id not in escrow_roles:
+                escrow_roles[bot_chat_id] = {}
+            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            escrow_roles[bot_chat_id]['initiator_username'] = pending['initiator_username']
+            
+            # Promote bot to admin
+            await user_client.promote_chat_member(
+                chat_id=supergroup.id,
+                user_id=bot_username,
+                privileges=ChatPrivileges(
+                    can_manage_chat=True,
+                    can_delete_messages=True,
+                    can_manage_video_chats=True,
+                    can_restrict_members=True,
+                    can_promote_members=True,
+                    can_change_info=True,
+                    can_invite_users=True,
+                    can_pin_messages=True,
+                    is_anonymous=False
+                )
+            )
+            
+            # Promote userbot to anonymous admin
+            me = await user_client.get_me()
+            try:
+                await user_client.promote_chat_member(
+                    chat_id=supergroup.id,
+                    user_id=me.id,
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_pin_messages=True,
+                        can_invite_users=True,
+                        can_promote_members=True,
+                        can_restrict_members=True,
+                        can_change_info=True,
+                        is_anonymous=True
+                    )
+                )
+            except Exception as e:
+                print(f"❌ Direct escrow: Failed to promote userbot to anonymous admin: {e}")
+            
+            # Create invite link with join request approval
+            invite_link_obj = await user_client.create_chat_invite_link(
+                supergroup.id,
+                creates_join_request=True
+            )
+            invite_link = invite_link_obj.invite_link
+            
+            # Send welcome message inside the group
+            welcome_text = """📍 Hey there traders! Welcome to our escrow service.
+✅ Please start with /dd command and fill the DealInfo Form"""
+            
+            sent_welcome = await user_client.send_message(
+                chat_id=supergroup.id,
+                text=f"<b>{welcome_text}</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            await user_client.pin_chat_message(
+                chat_id=supergroup.id,
+                message_id=sent_welcome.id,
+                disable_notification=True
+            )
+            
+            # Delete service messages
+            try:
+                async for message in user_client.get_chat_history(supergroup.id, limit=10):
+                    if message.service:
+                        await user_client.delete_messages(supergroup.id, message.id)
+            except Exception as e:
+                print(f"Could not delete service messages: {e}")
+            
+            initiator_username = pending['initiator_username']
+            counterparty_username = pending['counterparty_username']
+            
+            # Build the invite message
+            invite_message_text = (
+                f"<b>{initiator_username} &amp; {counterparty_username} are requested to join this <b>{escrow_type} Escrow Group</b>… Only you two can join this group.</b>\n\n"
+                f"<b>Link :</b> {invite_link}\n\n"
+                f"<b>🚫Beware of scammers🚫</b>\n\n"
+                f"<b>Previous deals Stats:</b>\n"
+                f"<b>{initiator_username} ($0)</b>\n"
+                f"<b>{counterparty_username} ($0)</b>\n\n"
+                f"<b>Always use @PagaLEscrowBot to stay secured ✅</b>"
+            )
+            
+            # Send invite message in the source chat
+            source_chat_id = pending['source_chat_id']
+            sent_invite = await context.bot.send_message(
+                chat_id=source_chat_id,
+                text=invite_message_text,
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+            
+            # Store direct escrow tracking info
+            direct_escrow_pending[bot_chat_id] = {
+                'initiator_id': pending['initiator_id'],
+                'counterparty_id': pending.get('counterparty_id'),
+                'initiator_username': initiator_username,
+                'counterparty_username': counterparty_username,
+                'invite_message_id': sent_invite.message_id,
+                'invite_chat_id': source_chat_id,
+                'joined': set(),
+                'supergroup_id': supergroup.id
+            }
+            
+            # Clean up pending selection
+            del direct_escrow_selection[user.id]
+            
+            # Edit the original message to confirm
+            await query.edit_message_text(
+                f"<b>✅ {escrow_type} Escrow group created for {initiator_username} &amp; {counterparty_username}.</b>\n\n"
+                f"<b>Invite link sent below. Only approved users can join.</b>",
+                parse_mode='HTML'
+            )
             
         except FloodWait as e:
             await query.edit_message_text(f"⏳ Rate limit hit. Please wait {e.value} seconds and try again.")
@@ -5053,6 +5294,53 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(result_msg, parse_mode='HTML')
     print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {left_count} left, {failed_count} failed")
 
+async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle join requests for direct escrow groups - only approve initiator and counterparty"""
+    join_request = update.chat_join_request
+    chat_id = join_request.chat.id
+    user_id = join_request.from_user.id
+    
+    # Check if this chat has a pending direct escrow
+    pending = direct_escrow_pending.get(chat_id)
+    if not pending:
+        return
+    
+    initiator_id = pending.get('initiator_id')
+    counterparty_id = pending.get('counterparty_id')
+    
+    # Approve only initiator or counterparty
+    if user_id in (initiator_id, counterparty_id):
+        try:
+            await join_request.approve()
+            print(f"✅ Approved join request from user {user_id} in chat {chat_id}")
+            
+            # Track who joined
+            pending['joined'].add(user_id)
+            
+            # Check if both have joined
+            both_joined = initiator_id in pending['joined'] and counterparty_id in pending['joined']
+            if both_joined:
+                # Edit the invite message to show trade started
+                initiator_username = pending['initiator_username']
+                counterparty_username = pending['counterparty_username']
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=pending['invite_chat_id'],
+                        message_id=pending['invite_message_id'],
+                        text=f"<b>✅ Trade Started between {initiator_username} and {counterparty_username}</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    print(f"Failed to edit invite message: {e}")
+        except Exception as e:
+            print(f"❌ Failed to approve join request from user {user_id}: {e}")
+    else:
+        try:
+            await join_request.decline()
+            print(f"❌ Declined join request from user {user_id} in chat {chat_id} (not authorized)")
+        except Exception as e:
+            print(f"❌ Failed to decline join request from user {user_id}: {e}")
+
 async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Track when members join and auto-promote admins using userbot"""
     global user_client
@@ -5073,6 +5361,27 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Only process if someone just joined (was not a member, now is a member)
     if not was_member and is_member:
         print(f"👤 New member detected: {user_id} in chat {chat_id}")
+        
+        # Track direct escrow joins (backup for join request handler)
+        if chat_id in direct_escrow_pending:
+            pending = direct_escrow_pending[chat_id]
+            initiator_id = pending.get('initiator_id')
+            counterparty_id = pending.get('counterparty_id')
+            if user_id in (initiator_id, counterparty_id):
+                pending['joined'].add(user_id)
+                both_joined = initiator_id in pending['joined'] and counterparty_id in pending['joined']
+                if both_joined:
+                    initiator_username = pending['initiator_username']
+                    counterparty_username = pending['counterparty_username']
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=pending['invite_chat_id'],
+                            message_id=pending['invite_message_id'],
+                            text=f"<b>✅ Trade Started between {initiator_username} and {counterparty_username}</b>",
+                            parse_mode='HTML'
+                        )
+                    except Exception as e:
+                        print(f"Failed to edit invite message from track_chat_members: {e}")
         
         # Check if the user is in the admin list
         # But skip if it's the userbot itself (to preserve its anonymous admin status)
@@ -5275,6 +5584,7 @@ def main():
     app.add_handler(CommandHandler("setaddy", setaddy_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
+    app.add_handler(ChatJoinRequestHandler(handle_join_request))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
     # Handles both text messages and captions on photos/documents
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
@@ -5312,7 +5622,8 @@ def main():
     app.run_polling(
         poll_interval=0.5,  # Check for updates every 0.5 seconds
         timeout=10,  # Faster timeout
-        drop_pending_updates=False
+        drop_pending_updates=False,
+        allowed_updates=["message", "callback_query", "chat_member", "my_chat_member", "chat_join_request"]
     )
 
 if __name__ == "__main__":

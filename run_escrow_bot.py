@@ -20,7 +20,7 @@ def main():
     print("✅ PagaL Escrow Bot (@PagaLEscrowBot) - Starting...")
     
     import escrow_bot
-    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ChatMemberHandler
+    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ChatMemberHandler, ChatJoinRequestHandler
     
     # Load persistent data on startup
     escrow_bot.load_blacklist()
@@ -57,6 +57,7 @@ def main():
     app.add_handler(CommandHandler("setaddy", escrow_bot.setaddy_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
     app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
+    app.add_handler(ChatJoinRequestHandler(escrow_bot.handle_join_request))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, escrow_bot.handle_deal_details_message))
     
@@ -96,7 +97,7 @@ def main():
     print("✅ Bot is now polling for updates...")
     
     # Include chat_member in allowed_updates to receive member join events
-    app.run_polling(allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"])
+    app.run_polling(allowed_updates=["message", "callback_query", "chat_member", "my_chat_member", "chat_join_request"])
 
 if __name__ == "__main__":
     main()
