@@ -1303,13 +1303,13 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             # Build the invite message
             invite_message_text = (
-                f"<b>{initiator_username} &amp; {counterparty_username} are requested to join this <b>{escrow_type} Escrow Group</b>… Only you two can join this group.</b>\n\n"
-                f"<b>Link :</b> {invite_link}\n\n"
-                f"<b>🚫Beware of scammers🚫</b>\n\n"
-                f"<b>Previous deals Stats:</b>\n"
-                f"<b>{initiator_username} ($0)</b>\n"
-                f"<b>{counterparty_username} ($0)</b>\n\n"
-                f"<b>Always use @PagaLEscrowBot to stay secured ✅</b>"
+                f"{initiator_username} &amp; {counterparty_username} are requested to join this <b>{escrow_type} Escrow Group</b>… Only you two can join this group.\n\n"
+                f"Link : {invite_link}\n\n"
+                f"🚫Beware of scammers🚫\n\n"
+                f"Previous deals Stats:\n"
+                f"{initiator_username} ($0)\n"
+                f"{counterparty_username} ($0)\n\n"
+                f"Always use @PagaLEscrowBot to stay secured ✅"
             )
             
             # Edit the "Creating safe trading place..." message to show the invite format
