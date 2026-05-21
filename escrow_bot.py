@@ -557,9 +557,7 @@ async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f"<b>Starting escrow with {counterparty_username}</b>\n\n"
-            f"Please select your escrow type from below.",
-            parse_mode='HTML',
+            "Please select your escrow type from below.",
             reply_markup=reply_markup
         )
         return
