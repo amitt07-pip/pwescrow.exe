@@ -93,6 +93,12 @@ direct_escrow_pending = {}
 # Pending direct escrow type selection: {user_id: {'counterparty_username': ..., 'counterparty_id': ..., 'initiator_username': ..., 'initiator_id': ..., 'source_chat_id': ...}}
 direct_escrow_selection = {}
 
+# User deal stats: {user_id: float} - lifetime deal volume for display
+user_deal_stats = {}
+
+# Pending stats increase: {user_id: True} - tracks users awaiting amount input for /mystats increase
+awaiting_stats_increase = {}
+
 # CEO and OWNER IDs for restricted commands
 CEO_ID = 7338429782
 OWNER_ID = 6864194951
@@ -101,6 +107,7 @@ OWNER_ID = 6864194951
 BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blacklist.json")
 GLOBAL_FEE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_fee.json")
 SAVED_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_addresses.json")
+USER_STATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_deal_stats.json")
 
 def load_blacklist():
     """Load blacklisted users from file on startup."""
@@ -173,6 +180,29 @@ def save_global_fee():
         os.replace(temp_file, GLOBAL_FEE_FILE)
     except IOError as e:
         print(f"⚠️ Failed to save global fee file: {e}")
+
+def load_user_deal_stats():
+    """Load user deal stats from file on startup."""
+    global user_deal_stats
+    try:
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    user_deal_stats = {int(k): float(v) for k, v in data.items()}
+                    print(f"✅ Loaded deal stats for {len(user_deal_stats)} users")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load user deal stats file: {e}")
+
+def save_user_deal_stats():
+    """Save user deal stats to file."""
+    try:
+        temp_file = USER_STATS_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({str(k): v for k, v in user_deal_stats.items()}, f)
+        os.replace(temp_file, USER_STATS_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save user deal stats file: {e}")
 
 def get_escrow_fee_percent(both_have_bio: bool) -> float:
     """Get the escrow fee percent based on global setting and bio status."""
@@ -1301,14 +1331,18 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             initiator_username = pending['initiator_username']
             counterparty_username = pending['counterparty_username']
             
+            # Get deal stats for both users
+            initiator_stats = user_deal_stats.get(pending['initiator_id'], 0.0)
+            counterparty_stats = user_deal_stats.get(pending.get('counterparty_id'), 0.0) if pending.get('counterparty_id') else 0.0
+            
             # Build the invite message
             invite_message_text = (
                 f"{initiator_username} &amp; {counterparty_username} are requested to join this <b>{escrow_type} Escrow Group</b>… Only you two can join this group.\n\n"
                 f"Link : {invite_link}\n\n"
                 f"🚫Beware of scammers🚫\n\n"
                 f"Previous deals Stats:\n"
-                f"{initiator_username} ($0.00)\n"
-                f"{counterparty_username} ($0.00)\n\n"
+                f"{initiator_username} (${initiator_stats:.2f})\n"
+                f"{counterparty_username} (${counterparty_stats:.2f})\n\n"
                 f"Always use @PagaLEscrowBot to stay secured ✅"
             )
             
@@ -2545,6 +2579,16 @@ Thank you for using @PagaLEscrowBot 🙌
         await query.answer("Operation cancelled.")
         await query.edit_message_text(
             "<b>❌ Empty operation cancelled.</b>",
+            parse_mode='HTML'
+        )
+    
+    elif query.data == "mystats_increase":
+        user_id = query.from_user.id
+        await query.answer()
+        awaiting_stats_increase[user_id] = True
+        await query.edit_message_text(
+            "<b>How much do you want to increase your stats by?</b>\n\n"
+            "Send the amount (e.g. <code>500</code> or <code>1250.50</code>)",
             parse_mode='HTML'
         )
     
@@ -4996,6 +5040,27 @@ async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
+async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /mystats command - show user's deal stats with option to increase"""
+    if await check_blacklist(update, context):
+        return
+    
+    user = update.effective_user
+    user_id = user.id
+    current_stats = user_deal_stats.get(user_id, 0.0)
+    
+    keyboard = [
+        [InlineKeyboardButton("Increase", callback_data="mystats_increase")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"<b>Your Deal Stats</b>\n\n"
+        f"<b>Lifetime Volume:</b> ${current_stats:.2f}",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
 async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /save command - save user's crypto address for a specific chain"""
     # Check if user is blacklisted
@@ -5462,8 +5527,31 @@ async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         print(f"❌ Failed to promote admin {user_id} after {max_retries} attempts")
 
 async def handle_deal_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle messages in groups to capture deal details (Quantity/Amount) after /dd"""
+    """Handle messages in groups to capture deal details (Quantity/Amount) after /dd, and stats increase input"""
     if not update.message:
+        return
+    
+    # Handle stats increase input
+    user_id = update.effective_user.id
+    if user_id in awaiting_stats_increase:
+        message_text = update.message.text or ""
+        try:
+            amount = float(message_text.strip())
+            if amount <= 0:
+                await update.message.reply_text("<b>Please enter a positive amount.</b>", parse_mode='HTML')
+                return
+            current = user_deal_stats.get(user_id, 0.0)
+            user_deal_stats[user_id] = current + amount
+            save_user_deal_stats()
+            del awaiting_stats_increase[user_id]
+            await update.message.reply_text(
+                f"<b>Stats updated!</b>\n\n"
+                f"<b>Added:</b> ${amount:.2f}\n"
+                f"<b>New Lifetime Volume:</b> ${user_deal_stats[user_id]:.2f}",
+                parse_mode='HTML'
+            )
+        except ValueError:
+            await update.message.reply_text("<b>Please send a valid number.</b>", parse_mode='HTML')
         return
     
     chat = update.effective_chat
@@ -5517,10 +5605,11 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
         print(f"  No quantity/amount pattern found in message")
 
 def main():
-    # Load blacklist, global fee, and saved addresses from file on startup
+    # Load blacklist, global fee, saved addresses, and deal stats from file on startup
     load_blacklist()
     load_global_fee()
     load_saved_addresses()
+    load_user_deal_stats()
     
     if not BOT_TOKEN:
         print("❌ Error: ESCROW_BOT_TOKEN environment variable not set!")
@@ -5570,6 +5659,7 @@ def main():
     app.add_handler(CommandHandler("id", id_command))
     app.add_handler(CommandHandler("globalfee", globalfee_command))
     app.add_handler(CommandHandler("save", save_command))
+    app.add_handler(CommandHandler("mystats", mystats_command))
     app.add_handler(CommandHandler("empty", empty_command))
     app.add_handler(CommandHandler("setaddy", setaddy_command))
     app.add_handler(CallbackQueryHandler(button_callback))
@@ -5578,6 +5668,7 @@ def main():
     # Message handler to capture deal details (Quantity/Amount) after /dd command
     # Handles both text messages and captions on photos/documents
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_deal_details_message))
     
     # Start deposit monitoring in background using PTB's task management
     async def post_init(application):

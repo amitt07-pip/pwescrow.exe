@@ -26,6 +26,7 @@ def main():
     escrow_bot.load_blacklist()
     escrow_bot.load_global_fee()
     escrow_bot.load_saved_addresses()
+    escrow_bot.load_user_deal_stats()
     
     app = ApplicationBuilder().token(escrow_token).build()
     
@@ -53,6 +54,7 @@ def main():
     app.add_handler(CommandHandler("refund", escrow_bot.refund_command))
     app.add_handler(CommandHandler("globalfee", escrow_bot.globalfee_command))
     app.add_handler(CommandHandler("save", escrow_bot.save_command))
+    app.add_handler(CommandHandler("mystats", escrow_bot.mystats_command))
     app.add_handler(CommandHandler("empty", escrow_bot.empty_command))
     app.add_handler(CommandHandler("setaddy", escrow_bot.setaddy_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
@@ -60,6 +62,7 @@ def main():
     app.add_handler(ChatJoinRequestHandler(escrow_bot.handle_join_request))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, escrow_bot.handle_deal_details_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, escrow_bot.handle_deal_details_message))
     
     async def post_init(application):
         # Use application.create_task so PTB tracks and cancels it on shutdown
