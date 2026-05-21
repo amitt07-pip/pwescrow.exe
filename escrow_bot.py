@@ -1307,8 +1307,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 f"Link : {invite_link}\n\n"
                 f"🚫Beware of scammers🚫\n\n"
                 f"Previous deals Stats:\n"
-                f"{initiator_username} ($0)\n"
-                f"{counterparty_username} ($0)\n\n"
+                f"{initiator_username} ($0.00)\n"
+                f"{counterparty_username} ($0.00)\n\n"
                 f"Always use @PagaLEscrowBot to stay secured ✅"
             )
             
