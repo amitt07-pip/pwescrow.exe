@@ -2644,8 +2644,104 @@ Thank you for using @PagaLEscrowBot 🙌
         new_address = amit_addr if owner == "amit" else suraj_addr
         owner_name = "Amit" if owner == "amit" else "Suraj"
         
+        # Get old address before updating (for monitoring transfer)
+        old_address = escrow_roles[target_chat_id].get('escrow_address')
+        
         # Set the escrow address for this deal
         escrow_roles[target_chat_id]['escrow_address'] = new_address
+        
+        # Transfer monitoring from old address to new address
+        if old_address and old_address in monitored_addresses:
+            monitoring_data = monitored_addresses.pop(old_address)
+            monitored_addresses[new_address] = monitoring_data
+        
+        # Immediately update the deposit message in the target group chat
+        deposit_message_id = escrow_roles[target_chat_id].get('deposit_message_id')
+        if deposit_message_id:
+            try:
+                roles = escrow_roles[target_chat_id]
+                buyer_info = roles.get('buyer')
+                seller_info = roles.get('seller')
+                token = roles.get('selected_token')
+                transaction_id = roles.get('transaction_id')
+                trade_start_time = roles.get('trade_start_time')
+                
+                network_label = network
+                
+                # Get current balance
+                monitored_balance = 0
+                if new_address in monitored_addresses:
+                    monitored_balance = monitored_addresses[new_address]['total_balance']
+                baseline_balance = roles.get('baseline_balance', 0)
+                deal_balance = max(0, monitored_balance - baseline_balance)
+                manual_balance = roles.get('balance', 0)
+                current_balance = deal_balance + manual_balance
+                
+                # Calculate remaining time
+                last_deposit_time = roles.get('last_deposit_time')
+                if last_deposit_time:
+                    time_elapsed = (datetime.now() - last_deposit_time).total_seconds() / 60
+                    remaining_time = max(0, 20 - time_elapsed)
+                else:
+                    remaining_time = 20.00
+                
+                # Determine group type
+                try:
+                    target_chat = await context.bot.get_chat(target_chat_id)
+                    is_otc_group = "OTC" in target_chat.title if target_chat.title else False
+                except Exception:
+                    is_otc_group = False
+                
+                if buyer_info and seller_info:
+                    # Set payment instruction based on group type
+                    if is_otc_group:
+                        payment_instruction = f"<b>Buyer [{buyer_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+                    else:
+                        payment_instruction = f"<b>Seller [{seller_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+                    
+                    # Set release/refund messages based on group type
+                    if is_otc_group:
+                        release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+                        refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
+                    else:
+                        release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+                        refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
+                    
+                    deposit_message_text = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
+
+⚡️ <b>SELLER</b>
+{seller_info['username']} | [{seller_info['user_id']}]
+⚡️ <b>BUYER</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
+🟢 <b>ESCROW ADDRESS</b>
+<code>{new_address}</code> <b>[{token}] [{network_label}]</b>
+
+{payment_instruction}
+
+Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}$]</u></b>
+
+⏰ <b>Trade Start Time: {trade_start_time}</b>
+⏰ <b>Address Reset In: {remaining_time:.2f} Min</b>
+
+📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
+<b>Useful commands:</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
+
+<b>Remember, once commands are used payment will be released, there is no revert!</b>"""
+                    
+                    keyboard = [[InlineKeyboardButton("Check Payment", callback_data="check_payment_deposit")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    await context.bot.edit_message_text(
+                        chat_id=target_chat_id,
+                        message_id=deposit_message_id,
+                        text=deposit_message_text,
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+            except Exception as e:
+                print(f"Warning: Could not update deposit message in group {target_chat_id}: {e}")
         
         await query.edit_message_text(
             f"<b>Escrow address updated for chat:</b> <code>{target_chat_id}</code>\n\n"
