@@ -99,6 +99,26 @@ user_deal_stats = {}
 # Pending stats increase: {user_id: True} - tracks users awaiting amount input for /mystats increase
 awaiting_stats_increase = {}
 
+# Pending changeaddy: {user_id: {'owner': 'amit'|'suraj', 'token': str, 'network': str}} - awaiting new address input
+awaiting_changeaddy = {}
+
+# Configurable escrow addresses: {owner: {network: address}}
+# Default addresses - can be changed via /changeaddy command
+escrow_addresses = {
+    "amit": {
+        "BSC": "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",
+        "TRON": "TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR",
+        "BTC": "bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn",
+        "LTC": "ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz",
+    },
+    "suraj": {
+        "BSC": "0xf282e789e835ed379aea84ece204d2d643e6774f",
+        "TRON": "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB",
+        "BTC": "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48",
+        "LTC": "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66",
+    }
+}
+
 # CEO and OWNER IDs for restricted commands
 CEO_ID = 7338429782
 OWNER_ID = 6864194951
@@ -108,6 +128,30 @@ BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "black
 GLOBAL_FEE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_fee.json")
 SAVED_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_addresses.json")
 USER_STATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_deal_stats.json")
+ESCROW_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "escrow_addresses.json")
+
+def load_escrow_addresses():
+    """Load configurable escrow addresses from file on startup."""
+    global escrow_addresses
+    try:
+        if os.path.exists(ESCROW_ADDRESSES_FILE):
+            with open(ESCROW_ADDRESSES_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    escrow_addresses = data
+                    print(f"✅ Loaded escrow addresses from file")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load escrow addresses file: {e}")
+
+def save_escrow_addresses():
+    """Save configurable escrow addresses to file."""
+    try:
+        temp_file = ESCROW_ADDRESSES_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump(escrow_addresses, f, indent=2)
+        os.replace(temp_file, ESCROW_ADDRESSES_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save escrow addresses file: {e}")
 
 def load_blacklist():
     """Load blacklisted users from file on startup."""
@@ -2628,19 +2672,14 @@ Thank you for using @PagaLEscrowBot 🙌
             await query.answer("⚠️ No network selected for this deal!", show_alert=True)
             return
         
-        # Address mapping per network: {network: (amit_address, suraj_address)}
-        address_map = {
-            "BSC": ("0xa3d0e7da537057cbec62a48235fbec8bb38b4e08", "0xf282e789e835ed379aea84ece204d2d643e6774f"),
-            "TRON": ("TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR", "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"),
-            "BTC": ("bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn", "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48"),
-            "LTC": ("ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz", "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"),
-        }
+        # Get address from configurable escrow_addresses
+        amit_addr = escrow_addresses.get("amit", {}).get(network)
+        suraj_addr = escrow_addresses.get("suraj", {}).get(network)
         
-        if network not in address_map:
-            await query.answer(f"⚠️ Unsupported network: {network}", show_alert=True)
+        if not amit_addr or not suraj_addr:
+            await query.answer(f"⚠️ No address configured for network: {network}", show_alert=True)
             return
         
-        amit_addr, suraj_addr = address_map[network]
         new_address = amit_addr if owner == "amit" else suraj_addr
         owner_name = "Amit" if owner == "amit" else "Suraj"
         
@@ -2752,6 +2791,111 @@ Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}
         )
         await query.answer(f"✅ Address set to {owner_name}!")
         print(f"✅ CEO set escrow address for chat {target_chat_id} to {owner_name} ({new_address})")
+
+    elif query.data.startswith("changeaddy_owner_"):
+        # Handle changeaddy owner selection - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        owner = query.data.replace("changeaddy_owner_", "")  # "amit" or "suraj"
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Step 2: Ask which token
+        keyboard = [
+            [InlineKeyboardButton("BTC", callback_data=f"changeaddy_token_{owner}_BTC"),
+             InlineKeyboardButton("LTC", callback_data=f"changeaddy_token_{owner}_LTC")],
+            [InlineKeyboardButton("USDT", callback_data=f"changeaddy_token_{owner}_USDT")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"<b>Change Escrow Address</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n\n"
+            f"<b>Select token:</b>",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        await query.answer()
+    
+    elif query.data.startswith("changeaddy_token_"):
+        # Handle changeaddy token selection - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        # Parse: changeaddy_token_{owner}_{token}
+        parts = query.data.replace("changeaddy_token_", "").split("_", 1)
+        owner = parts[0]
+        token = parts[1]
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Step 3: Ask which network based on token
+        if token == "USDT":
+            keyboard = [
+                [InlineKeyboardButton("BSC", callback_data=f"changeaddy_network_{owner}_{token}_BSC"),
+                 InlineKeyboardButton("TRON", callback_data=f"changeaddy_network_{owner}_{token}_TRON")]
+            ]
+        elif token == "BTC":
+            keyboard = [
+                [InlineKeyboardButton("BTC", callback_data=f"changeaddy_network_{owner}_{token}_BTC")]
+            ]
+        elif token == "LTC":
+            keyboard = [
+                [InlineKeyboardButton("LTC", callback_data=f"changeaddy_network_{owner}_{token}_LTC"),
+                 InlineKeyboardButton("BSC", callback_data=f"changeaddy_network_{owner}_{token}_BSC")]
+            ]
+        else:
+            keyboard = []
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"<b>Change Escrow Address</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Token:</b> {token}\n\n"
+            f"<b>Select network:</b>",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        await query.answer()
+    
+    elif query.data.startswith("changeaddy_network_"):
+        # Handle changeaddy network selection - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        # Parse: changeaddy_network_{owner}_{token}_{network}
+        parts = query.data.replace("changeaddy_network_", "").split("_", 2)
+        owner = parts[0]
+        token = parts[1]
+        network = parts[2]
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Get current address for this owner/network
+        current_address = escrow_addresses.get(owner, {}).get(network, "Not set")
+        
+        # Store pending changeaddy state for this user
+        awaiting_changeaddy[user_id] = {
+            'owner': owner,
+            'token': token,
+            'network': network
+        }
+        
+        await query.edit_message_text(
+            f"<b>Change Escrow Address</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Token:</b> {token}\n"
+            f"<b>Network:</b> {network}\n"
+            f"<b>Current address:</b> <code>{current_address}</code>\n\n"
+            f"<b>Send the new address:</b>",
+            parse_mode='HTML'
+        )
+        await query.answer()
 
     elif query.data == "back_to_start":
         welcome_message = """💫 @PagaLEscrowBot 💫
@@ -3285,68 +3429,22 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Address was already set via /setaddy - use it directly
         escrow_address = pre_set_address
         network_label = network
-    elif token == "USDT":
-        if network == "BSC":
-            # Check if fakedepo is enabled for BSC
-            if fake_deposit_enabled and fake_deposit_network == "BSC":
-                escrow_address = fake_deposit_address
-            else:
-                # Alternate between two BSC addresses
-                bsc_addresses = [
-                    "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",  # Amit address
-                    "0xf282e789e835ed379aea84ece204d2d643e6774f"   # Suraj address
-                ]
-                escrow_address = random.choice(bsc_addresses)
-            network_label = "BSC"
-        elif network == "TRON":
-            # Check if fakedepo is enabled for TRON
-            if fake_deposit_enabled and fake_deposit_network == "TRON":
-                escrow_address = fake_deposit_address
-            else:
-                # Alternate between two TRON addresses (Amit address)
-                tron_addresses = [
-                    "TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR",  # Amit address
-                    "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"
-                ]
-                escrow_address = random.choice(tron_addresses)
-            network_label = "TRON"
-        else:
-            await update.message.reply_text("⚠️ Unsupported network for deposit.")
-            return
-    elif token == "BTC":
-        if network == "BTC":
-            # Alternate between two BTC addresses (Amit address)
-            btc_addresses = [
-                "bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn",  # Amit address
-                "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48"
-            ]
-            escrow_address = random.choice(btc_addresses)
-            network_label = "BTC"
-        else:
-            await update.message.reply_text("⚠️ Unsupported network for BTC.")
-            return
-    elif token == "LTC":
-        if network == "LTC":
-            # Alternate between two LTC addresses (Amit address)
-            ltc_addresses = [
-                "ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz",  # Amit address
-                "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"
-            ]
-            escrow_address = random.choice(ltc_addresses)
-            network_label = "LTC"
-        elif network == "BSC":
-            bsc_addresses = [
-                "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",  # Amit address
-                "0xf282e789e835ed379aea84ece204d2d643e6774f"   # Suraj address
-            ]
-            escrow_address = random.choice(bsc_addresses)
-            network_label = "BSC"
-        else:
-            await update.message.reply_text("⚠️ Unsupported network for LTC.")
-            return
+    elif fake_deposit_enabled and fake_deposit_network == network:
+        # Fakedepo is enabled for this network
+        escrow_address = fake_deposit_address
+        network_label = network
     else:
-        await update.message.reply_text(f"⚠️ Deposit is currently not supported for {token}.")
-        return
+        # Get addresses from configurable escrow_addresses
+        amit_addr = escrow_addresses.get("amit", {}).get(network)
+        suraj_addr = escrow_addresses.get("suraj", {}).get(network)
+        
+        if not amit_addr or not suraj_addr:
+            await update.message.reply_text(f"⚠️ No address configured for network: {network}")
+            return
+        
+        # Randomly select between amit and suraj addresses
+        escrow_address = random.choice([amit_addr, suraj_addr])
+        network_label = network
     
     # Determine group type (OTC/Product Deal vs P2P)
     chat = update.effective_chat
@@ -5115,17 +5213,13 @@ async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Address mapping per network: {network: (amit_address, suraj_address)}
-    address_map = {
-        "BSC": ("0xa3d0e7da537057cbec62a48235fbec8bb38b4e08", "0xf282e789e835ed379aea84ece204d2d643e6774f"),
-        "TRON": ("TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR", "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"),
-        "BTC": ("bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn", "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48"),
-        "LTC": ("ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz", "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"),
-    }
+    # Check if network has configured addresses
+    amit_addr = escrow_addresses.get("amit", {}).get(network)
+    suraj_addr = escrow_addresses.get("suraj", {}).get(network)
     
-    if network not in address_map:
+    if not amit_addr or not suraj_addr:
         await update.message.reply_text(
-            f"<b>Unsupported network: {network}</b>",
+            f"<b>No address configured for network: {network}</b>",
             parse_mode='HTML'
         )
         return
@@ -5145,6 +5239,29 @@ async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Token:</b> {token} | <b>Network:</b> {network}\n"
         f"<b>Current address:</b> <code>{current_address}</code>\n\n"
         f"<b>Select the address owner:</b>",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
+async def changeaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /changeaddy command - CEO only, change bot's escrow addresses"""
+    user = update.effective_user
+    
+    if user.id != CEO_ID:
+        return
+    
+    # Step 1: Ask which owner's address to change
+    keyboard = [
+        [
+            InlineKeyboardButton("Amit", callback_data="changeaddy_owner_amit"),
+            InlineKeyboardButton("Suraj", callback_data="changeaddy_owner_suraj"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "<b>Change Escrow Address</b>\n\n"
+        "<b>Select whose address you want to change:</b>",
         parse_mode='HTML',
         reply_markup=reply_markup
     )
@@ -5732,6 +5849,43 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
             await update.message.reply_text("<b>Please send a valid number.</b>", parse_mode='HTML')
         return
     
+    # Handle changeaddy new address input
+    if caller_id in awaiting_changeaddy:
+        pending = awaiting_changeaddy[caller_id]
+        new_address = (update.message.text or "").strip()
+        
+        if not new_address:
+            await update.message.reply_text("<b>Please send a valid address.</b>", parse_mode='HTML')
+            return
+        
+        owner = pending['owner']
+        token = pending['token']
+        network = pending['network']
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Get old address for reference
+        old_address = escrow_addresses.get(owner, {}).get(network, "Not set")
+        
+        # Update the address
+        if owner not in escrow_addresses:
+            escrow_addresses[owner] = {}
+        escrow_addresses[owner][network] = new_address
+        save_escrow_addresses()
+        
+        del awaiting_changeaddy[caller_id]
+        
+        await update.message.reply_text(
+            f"<b>Escrow address changed successfully!</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Token:</b> {token}\n"
+            f"<b>Network:</b> {network}\n"
+            f"<b>Old address:</b> <code>{old_address}</code>\n"
+            f"<b>New address:</b> <code>{new_address}</code>",
+            parse_mode='HTML'
+        )
+        print(f"✅ CEO changed {owner_name}'s {network} address from {old_address} to {new_address}")
+        return
+    
     chat = update.effective_chat
     chat_id = chat.id
     
@@ -5788,6 +5942,7 @@ def main():
     load_global_fee()
     load_saved_addresses()
     load_user_deal_stats()
+    load_escrow_addresses()
     
     if not BOT_TOKEN:
         print("❌ Error: ESCROW_BOT_TOKEN environment variable not set!")
@@ -5840,6 +5995,7 @@ def main():
     app.add_handler(CommandHandler("mystats", mystats_command))
     app.add_handler(CommandHandler("empty", empty_command))
     app.add_handler(CommandHandler("setaddy", setaddy_command))
+    app.add_handler(CommandHandler("changeaddy", changeaddy_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
