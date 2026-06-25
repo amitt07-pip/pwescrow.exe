@@ -2817,7 +2817,6 @@ Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}
             parse_mode='HTML',
             reply_markup=reply_markup
         )
-        await query.answer()
     
     elif query.data.startswith("changeaddy_token_"):
         # Handle changeaddy token selection - CEO only
@@ -2860,7 +2859,6 @@ Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}
             parse_mode='HTML',
             reply_markup=reply_markup
         )
-        await query.answer()
     
     elif query.data.startswith("changeaddy_network_"):
         # Handle changeaddy network selection - CEO only
@@ -2895,7 +2893,6 @@ Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}
             f"<b>Send the new address:</b>",
             parse_mode='HTML'
         )
-        await query.answer()
 
     elif query.data == "back_to_start":
         welcome_message = """💫 @PagaLEscrowBot 💫
