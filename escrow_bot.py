@@ -5242,10 +5242,18 @@ async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def changeaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /changeaddy command - CEO only, change bot's escrow addresses"""
+    print(f"DEBUG: /changeaddy called by user {update.effective_user.id if update.effective_user else 'None'}, CEO_ID={CEO_ID}")
     user = update.effective_user
     
-    if user.id != CEO_ID:
+    if not user:
+        print("DEBUG: changeaddy - no effective_user")
         return
+    
+    if user.id != CEO_ID:
+        print(f"DEBUG: changeaddy - user {user.id} != CEO_ID {CEO_ID}, ignoring")
+        return
+    
+    print("DEBUG: changeaddy - CEO authorized, showing buttons")
     
     # Step 1: Ask which owner's address to change
     keyboard = [
