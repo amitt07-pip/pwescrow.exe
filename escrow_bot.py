@@ -3315,6 +3315,11 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Only the first user who sends /token can use it; ignore others (admins bypass)
+    existing_initiator = escrow_roles.get(chat_id, {}).get('token_initiator')
+    if existing_initiator and existing_initiator != user_id and user_id not in ADMIN_IDS:
+        return
+    
     # Store who initiated the /token command
     escrow_roles[chat_id]['token_initiator'] = user_id
     
@@ -3376,6 +3381,12 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Only the first user who sends /deposit can use it; ignore others (admins bypass)
+    user_id = update.effective_user.id
+    existing_depositor = escrow_roles.get(chat_id, {}).get('deposit_initiator')
+    if existing_depositor and existing_depositor != user_id and user_id not in ADMIN_IDS:
+        return
+    
     # Check if token and network are selected
     token = escrow_roles[chat_id].get('selected_token')
     network = escrow_roles[chat_id].get('selected_network')
@@ -3385,6 +3396,9 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ Please select token and network first using /token command."
         )
         return
+    
+    # Store who initiated the /deposit command
+    escrow_roles[chat_id]['deposit_initiator'] = user_id
     
     # Check if deposit was used recently (20-minute cooldown)
     last_deposit_time = escrow_roles[chat_id].get('last_deposit_time')
