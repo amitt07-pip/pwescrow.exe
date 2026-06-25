@@ -3029,7 +3029,7 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Try Bot API first
     try:
         user_chat = await context.bot.get_chat(user_id)
-        if user_chat.bio and "@PagaLEscrowBot" in user_chat.bio:
+        if user_chat.bio and "@pagalescrowbot" in user_chat.bio.lower():
             has_bot_in_bio = True
             print(f"✅ Bio detected via Bot API for user {user_id}")
     except Exception as e:
@@ -3043,7 +3043,7 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await user_client.start()
             
             pyrogram_user = await user_client.get_users(user_id)
-            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@PagaLEscrowBot" in pyrogram_user.bio:
+            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@pagalescrowbot" in pyrogram_user.bio.lower():
                 has_bot_in_bio = True
                 print(f"✅ Bio detected via Pyrogram for user {user_id}")
         except Exception as pyro_error:
@@ -3209,7 +3209,7 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Try Bot API first
     try:
         user_chat = await context.bot.get_chat(user_id)
-        if user_chat.bio and "@PagaLEscrowBot" in user_chat.bio:
+        if user_chat.bio and "@pagalescrowbot" in user_chat.bio.lower():
             has_bot_in_bio = True
             print(f"✅ Bio detected via Bot API for user {user_id}")
     except Exception as e:
@@ -3223,7 +3223,7 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await user_client.start()
             
             pyrogram_user = await user_client.get_users(user_id)
-            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@PagaLEscrowBot" in pyrogram_user.bio:
+            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@pagalescrowbot" in pyrogram_user.bio.lower():
                 has_bot_in_bio = True
                 print(f"✅ Bio detected via Pyrogram for user {user_id}")
         except Exception as pyro_error:
@@ -5242,18 +5242,10 @@ async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def changeaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /changeaddy command - CEO only, change bot's escrow addresses"""
-    print(f"DEBUG: /changeaddy called by user {update.effective_user.id if update.effective_user else 'None'}, CEO_ID={CEO_ID}")
     user = update.effective_user
     
-    if not user:
-        print("DEBUG: changeaddy - no effective_user")
-        return
-    
     if user.id != CEO_ID:
-        print(f"DEBUG: changeaddy - user {user.id} != CEO_ID {CEO_ID}, ignoring")
         return
-    
-    print("DEBUG: changeaddy - CEO authorized, showing buttons")
     
     # Step 1: Ask which owner's address to change
     keyboard = [
