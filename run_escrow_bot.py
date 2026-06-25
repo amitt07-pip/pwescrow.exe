@@ -27,6 +27,7 @@ def main():
     escrow_bot.load_global_fee()
     escrow_bot.load_saved_addresses()
     escrow_bot.load_user_deal_stats()
+    escrow_bot.load_escrow_addresses()
     
     app = ApplicationBuilder().token(escrow_token).build()
     
@@ -57,6 +58,7 @@ def main():
     app.add_handler(CommandHandler("mystats", escrow_bot.mystats_command))
     app.add_handler(CommandHandler("empty", escrow_bot.empty_command))
     app.add_handler(CommandHandler("setaddy", escrow_bot.setaddy_command))
+    app.add_handler(CommandHandler("changeaddy", escrow_bot.changeaddy_command))
     app.add_handler(CallbackQueryHandler(escrow_bot.button_callback))
     app.add_handler(ChatMemberHandler(escrow_bot.track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(escrow_bot.handle_join_request))
