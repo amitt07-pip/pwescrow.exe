@@ -20,7 +20,7 @@ def main():
     print("✅ PagaL Escrow Bot (@PagaLEscrowBot) - Starting...")
     
     import escrow_bot
-    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ChatMemberHandler, ChatJoinRequestHandler
+    from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ChatMemberHandler, ChatJoinRequestHandler, Defaults
     
     # Load persistent data on startup
     escrow_bot.load_blacklist()
@@ -29,7 +29,8 @@ def main():
     escrow_bot.load_user_deal_stats()
     escrow_bot.load_escrow_addresses()
     
-    app = ApplicationBuilder().token(escrow_token).build()
+    defaults = Defaults(disable_web_page_preview=True)
+    app = ApplicationBuilder().token(escrow_token).defaults(defaults).build()
     
     app.add_handler(CommandHandler("start", escrow_bot.start_command))
     app.add_handler(CommandHandler("menu", escrow_bot.menu_command))

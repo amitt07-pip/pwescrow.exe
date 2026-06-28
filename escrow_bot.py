@@ -4,7 +4,7 @@ if sys.version_info >= (3, 13):
     sys.modules["imghdr"] = types.ModuleType("imghdr")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, filters, Defaults
 from pyrogram import Client, enums
 from pyrogram.errors import FloodWait
 from pyrogram.types import ChatPrivileges
@@ -3004,8 +3004,8 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Get the crypto address from arguments
         crypto_address = " ".join(context.args)
     
-    # Get username (or use first name if no username)
-    username = f"@{user.username}" if user.username else user.first_name
+    # Use first name for display
+    username = user.first_name or "Unknown"
     
     # Initialize chat in escrow_roles if not exists
     if chat_id not in escrow_roles:
@@ -3184,8 +3184,8 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Get the crypto address from arguments
         crypto_address = " ".join(context.args)
     
-    # Get username (or use first name if no username)
-    username = f"@{user.username}" if user.username else user.first_name
+    # Use first name for display
+    username = user.first_name or "Unknown"
     
     # Initialize chat in escrow_roles if not exists
     if chat_id not in escrow_roles:
@@ -5970,9 +5970,11 @@ def main():
         print("")
     
     # Build app with optimized settings for faster response
+    defaults = Defaults(disable_web_page_preview=True)
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
+        .defaults(defaults)
         .concurrent_updates(True)  # Handle multiple updates concurrently
         .pool_timeout(30.0)  # Faster timeout for connections
         .connection_pool_size(8)  # More concurrent connections
