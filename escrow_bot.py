@@ -4514,20 +4514,15 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"⚠️ Failed to create invite link for CEO notification: {e}")
         
-        # Get all members and ban them (except bot itself and admins)
+        # Get all members and ban them (except bot itself only)
         bot_id = context.bot.id
         banned_count = 0
         try:
-            # Get chat administrators to know who NOT to ban
-            admins = await context.bot.get_chat_administrators(chat.id)
-            admin_ids = {admin.user.id for admin in admins}
-            
             # Use Pyrogram to get all members for banning
             if user_client:
                 if not user_client.is_connected:
                     await user_client.start()
                 
-                # First make sure userbot is in the group
                 try:
                     chat_id_str = str(chat.id)
                     if chat_id_str.startswith("-100"):
@@ -4538,8 +4533,8 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     members_to_ban = []
                     async for member in user_client.get_chat_members(pyrogram_id, limit=200):
                         member_id = member.user.id
-                        # Don't ban the bot, CEO, OWNER, or other admins
-                        if member_id != bot_id and member_id not in [CEO_ID, OWNER_ID] and member_id not in admin_ids:
+                        # Only skip the bot itself
+                        if member_id != bot_id:
                             members_to_ban.append(member_id)
                     
                     for member_id in members_to_ban:
@@ -4557,7 +4552,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         for role in ['buyer', 'seller']:
                             if role in roles:
                                 member_id = roles[role].get('user_id')
-                                if member_id and member_id != bot_id and member_id not in [CEO_ID, OWNER_ID]:
+                                if member_id and member_id != bot_id:
                                     try:
                                         await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
                                         banned_count += 1
@@ -4570,14 +4565,14 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for role in ['buyer', 'seller']:
                         if role in roles:
                             member_id = roles[role].get('user_id')
-                            if member_id and member_id != bot_id and member_id not in [CEO_ID, OWNER_ID]:
+                            if member_id and member_id != bot_id:
                                 try:
                                     await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
                                     banned_count += 1
                                 except Exception as ban_e:
                                     print(f"⚠️ Failed to ban {role} {member_id}: {ban_e}")
         except Exception as e:
-            print(f"⚠️ Failed to get admins or ban members: {e}")
+            print(f"⚠️ Failed to ban members: {e}")
         
         # Notify CEO in DM with invite link
         try:
