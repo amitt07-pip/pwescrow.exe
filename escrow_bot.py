@@ -4444,7 +4444,7 @@ async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /close command - CEO and OWNER only, userbot joins via invite link and permanently deletes the group"""
+    """Handle /close command - CEO and OWNER only, ban all members from group and notify CEO with invite link"""
     user = update.effective_user
     chat = update.effective_chat
     
@@ -4464,7 +4464,182 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(
-            "<b>🔄 Closing group... The userbot will join and delete this group permanently.</b>",
+            "<b>🔄 Closing group... Banning all members.</b>",
+            parse_mode='HTML'
+        )
+        
+        # Update escrow log based on deposit status
+        try:
+            if chat.id in escrow_roles:
+                log_message_id = escrow_roles[chat.id].get('log_message_id')
+                log_data = escrow_roles[chat.id].get('log_data', {})
+                status_stage = log_data.get('status_stage', 0)
+                
+                if log_message_id and LOGS_CHANNEL_ID:
+                    # Check if deposit was detected (stage 6 or higher)
+                    if status_stage >= 6:  # Deposit Detected or later
+                        # Keep all info, just update status to "Deal Closed"
+                        log_message = build_escrow_log_message(
+                            chat_id=chat.id,
+                            buyer_username=log_data.get('buyer_username', 'Not set'),
+                            seller_username=log_data.get('seller_username', 'Not set'),
+                            deal_amount=log_data.get('deal_amount', 'Not set'),
+                            group_type=log_data.get('group_type', 'P2P'),
+                            current_status="Deal Closed"
+                        )
+                        await context.bot.edit_message_text(
+                            chat_id=LOGS_CHANNEL_ID,
+                            message_id=log_message_id,
+                            text=log_message,
+                            parse_mode='HTML'
+                        )
+                        print(f"✅ Updated escrow log to 'Deal Closed' (with info) for chat {chat.id}")
+                    else:
+                        # Before deposit detected - just show "Deal Closed!" in bold
+                        await context.bot.edit_message_text(
+                            chat_id=LOGS_CHANNEL_ID,
+                            message_id=log_message_id,
+                            text="<b>Deal Closed!</b>",
+                            parse_mode='HTML'
+                        )
+                        print(f"✅ Updated escrow log to 'Deal Closed!' (no info) for chat {chat.id}")
+        except Exception as e:
+            print(f"⚠️  Failed to update escrow log for close: {e}")
+        
+        # Generate an invite link to send to CEO
+        invite_link = None
+        try:
+            chat_invite = await context.bot.create_chat_invite_link(
+                chat_id=chat.id,
+                name="Close command backup"
+            )
+            invite_link = chat_invite.invite_link
+        except Exception as e:
+            print(f"⚠️ Failed to create invite link for CEO notification: {e}")
+        
+        # Get all members and ban them (except bot itself and admins)
+        bot_id = context.bot.id
+        banned_count = 0
+        try:
+            # Get chat administrators to know who NOT to ban
+            admins = await context.bot.get_chat_administrators(chat.id)
+            admin_ids = {admin.user.id for admin in admins}
+            
+            # Use Pyrogram to get all members for banning
+            if user_client:
+                if not user_client.is_connected:
+                    await user_client.start()
+                
+                # First make sure userbot is in the group
+                try:
+                    chat_id_str = str(chat.id)
+                    if chat_id_str.startswith("-100"):
+                        pyrogram_id = int(chat_id_str)
+                    else:
+                        pyrogram_id = chat.id
+                    
+                    members_to_ban = []
+                    async for member in user_client.get_chat_members(pyrogram_id, limit=200):
+                        member_id = member.user.id
+                        # Don't ban the bot, CEO, OWNER, or other admins
+                        if member_id != bot_id and member_id not in [CEO_ID, OWNER_ID] and member_id not in admin_ids:
+                            members_to_ban.append(member_id)
+                    
+                    for member_id in members_to_ban:
+                        try:
+                            await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
+                            banned_count += 1
+                        except Exception as e:
+                            print(f"⚠️ Failed to ban member {member_id}: {e}")
+                    
+                except Exception as e:
+                    print(f"⚠️ Failed to get members via Pyrogram: {e}")
+                    # Fallback: try to ban buyer and seller from escrow_roles
+                    if chat.id in escrow_roles:
+                        roles = escrow_roles[chat.id]
+                        for role in ['buyer', 'seller']:
+                            if role in roles:
+                                member_id = roles[role].get('user_id')
+                                if member_id and member_id != bot_id and member_id not in [CEO_ID, OWNER_ID]:
+                                    try:
+                                        await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
+                                        banned_count += 1
+                                    except Exception as ban_e:
+                                        print(f"⚠️ Failed to ban {role} {member_id}: {ban_e}")
+            else:
+                # No userbot - fallback to banning buyer/seller from escrow_roles
+                if chat.id in escrow_roles:
+                    roles = escrow_roles[chat.id]
+                    for role in ['buyer', 'seller']:
+                        if role in roles:
+                            member_id = roles[role].get('user_id')
+                            if member_id and member_id != bot_id and member_id not in [CEO_ID, OWNER_ID]:
+                                try:
+                                    await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
+                                    banned_count += 1
+                                except Exception as ban_e:
+                                    print(f"⚠️ Failed to ban {role} {member_id}: {ban_e}")
+        except Exception as e:
+            print(f"⚠️ Failed to get admins or ban members: {e}")
+        
+        # Notify CEO in DM with invite link
+        try:
+            group_title = chat.title or f"Group {chat.id}"
+            notify_text = (
+                f"<b>Group Closed</b>\n\n"
+                f"<b>Group:</b> {html.escape(group_title)}\n"
+                f"<b>Chat ID:</b> <code>{chat.id}</code>\n"
+                f"<b>Closed by:</b> {user.first_name} ({user.id})\n"
+                f"<b>Members banned:</b> {banned_count}\n"
+            )
+            if invite_link:
+                notify_text += f"<b>Invite Link:</b> {invite_link}\n"
+            
+            await context.bot.send_message(
+                chat_id=CEO_ID,
+                text=notify_text,
+                parse_mode='HTML'
+            )
+            print(f"✅ Notified CEO about group close")
+        except Exception as e:
+            print(f"⚠️ Failed to notify CEO: {e}")
+        
+        await update.message.reply_text(
+            f"<b>✅ Group closed. {banned_count} member(s) banned.</b>",
+            parse_mode='HTML'
+        )
+        print(f"✅ Admin {user.id} closed group {chat.id}, banned {banned_count} members")
+        
+    except Exception as e:
+        print(f"❌ Failed to close group {chat.id}: {e}")
+        try:
+            await update.message.reply_text(
+                f"<b>❌ Failed to close group: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+        except:
+            pass
+
+
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /clear command - CEO only, permanently deletes the group"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    # CEO only
+    if user.id != CEO_ID:
+        return
+    
+    if chat.type not in ['group', 'supergroup']:
+        await update.message.reply_text(
+            "<b>⚠️ This command can only be used in groups.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    try:
+        await update.message.reply_text(
+            "<b>🔄 Deleting group permanently...</b>",
             parse_mode='HTML'
         )
         
@@ -4507,21 +4682,17 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             error_str = str(e)
             if "USER_ALREADY_PARTICIPANT" in error_str:
-                # Userbot is already in the group, use the invite link to get chat info
-                print(f"ℹ️ Userbot already in group, getting chat info via invite link...")
+                print(f"ℹ️ Userbot already in group, getting chat info...")
                 try:
-                    # Extract the invite hash from the link and use it to get chat info
                     existing_chat = await user_client.get_chat(invite_link)
                     target_chat_id = existing_chat.id
                     print(f"✅ Got existing chat ID via invite link: {target_chat_id}")
                 except Exception as e2:
                     print(f"❌ Failed to get chat info via invite link: {e2}")
-                    # Try using the chat username/id directly if it's a public group
                     try:
-                        # For supergroups, try without the -100 prefix
                         chat_id_str = str(chat.id)
                         if chat_id_str.startswith("-100"):
-                            pyrogram_id = int(chat_id_str)  # Keep as is for Pyrogram
+                            pyrogram_id = int(chat_id_str)
                         else:
                             pyrogram_id = chat.id
                         existing_chat = await user_client.get_chat(pyrogram_id)
@@ -4544,52 +4715,12 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await asyncio.sleep(1)
         
-        # Update escrow log based on deposit status
-        try:
-            if chat.id in escrow_roles:
-                log_message_id = escrow_roles[chat.id].get('log_message_id')
-                log_data = escrow_roles[chat.id].get('log_data', {})
-                status_stage = log_data.get('status_stage', 0)
-                
-                if log_message_id and LOGS_CHANNEL_ID:
-                    # Check if deposit was detected (stage 6 or higher)
-                    if status_stage >= 6:  # Deposit Detected or later
-                        # Keep all info, just update status to "Deal Closed"
-                        log_message = build_escrow_log_message(
-                            chat_id=chat.id,
-                            buyer_username=log_data.get('buyer_username', 'Not set'),
-                            seller_username=log_data.get('seller_username', 'Not set'),
-                            deal_amount=log_data.get('deal_amount', 'Not set'),
-                            group_type=log_data.get('group_type', 'P2P'),
-                            current_status="Deal Closed"
-                        )
-                        await context.bot.edit_message_text(
-                            chat_id=LOGS_CHANNEL_ID,
-                            message_id=log_message_id,
-                            text=log_message,
-                            parse_mode='HTML'
-                        )
-                        print(f"✅ Updated escrow log to 'Deal Closed' (with info) for chat {chat.id}")
-                    else:
-                        # Before deposit detected - just show "Deal Closed!" in bold
-                        await context.bot.edit_message_text(
-                            chat_id=LOGS_CHANNEL_ID,
-                            message_id=log_message_id,
-                            text="<b>Deal Closed!</b>",
-                            parse_mode='HTML'
-                        )
-                        print(f"✅ Updated escrow log to 'Deal Closed!' (no info) for chat {chat.id}")
-        except Exception as e:
-            print(f"⚠️  Failed to update escrow log for close: {e}")
-        
-        # Permanently delete the group for all members
-        # Use the chat ID from join_chat() directly - don't convert it
+        # Permanently delete the group
         try:
             await user_client.delete_supergroup(target_chat_id)
             print(f"✅ Permanently deleted group {chat.id}")
         except Exception as e:
             print(f"❌ Failed to delete group with delete_supergroup: {e}")
-            # Try alternative method - delete_chat
             try:
                 await user_client.delete_chat(target_chat_id)
                 print(f"✅ Permanently deleted group {chat.id} using delete_chat")
@@ -4606,13 +4737,13 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
                 return
         
-        print(f"✅ Admin {user.id} closed and deleted group {chat.id}")
+        print(f"✅ CEO {user.id} cleared (deleted) group {chat.id}")
         
     except Exception as e:
-        print(f"❌ Failed to close group {chat.id}: {e}")
+        print(f"❌ Failed to clear group {chat.id}: {e}")
         try:
             await update.message.reply_text(
-                f"<b>❌ Failed to close group: {str(e)}</b>",
+                f"<b>❌ Failed to delete group: {str(e)}</b>",
                 parse_mode='HTML'
             )
         except:
