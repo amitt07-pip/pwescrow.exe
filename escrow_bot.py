@@ -4444,15 +4444,15 @@ async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /close command - CEO and OWNER only, ban all members from group and notify CEO with invite link"""
+    """Handle /close command - all admins can use, ban all members from group and notify CEO with invite link"""
     user = update.effective_user
     chat = update.effective_chat
     
-    print(f"🔍 /close called by user {user.id if user else 'None'}, CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID}")
+    print(f"🔍 /close called by user {user.id if user else 'None'}")
     
-    # Check if user is CEO or OWNER - silently ignore others
-    if user.id not in [CEO_ID, OWNER_ID]:
-        print(f"❌ /close: User {user.id} not authorized (CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID})")
+    # Check if user is an admin - silently ignore others
+    if user.id not in ADMIN_IDS:
+        print(f"❌ /close: User {user.id} not authorized")
         return
     
     if chat.type not in ['group', 'supergroup']:
