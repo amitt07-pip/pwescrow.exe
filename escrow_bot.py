@@ -4456,17 +4456,14 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if chat.type not in ['group', 'supergroup']:
-        await update.message.reply_text(
-            "<b>⚠️ This command can only be used in groups.</b>",
-            parse_mode='HTML'
-        )
         return
     
     try:
-        await update.message.reply_text(
-            "<b>🔄 Closing group... Banning all members.</b>",
-            parse_mode='HTML'
-        )
+        # Delete the command message itself
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
         
         # Update escrow log based on deposit status
         try:
@@ -4604,21 +4601,10 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"⚠️ Failed to notify CEO: {e}")
         
-        await update.message.reply_text(
-            f"<b>✅ Group closed. {banned_count} member(s) banned.</b>",
-            parse_mode='HTML'
-        )
         print(f"✅ Admin {user.id} closed group {chat.id}, banned {banned_count} members")
         
     except Exception as e:
         print(f"❌ Failed to close group {chat.id}: {e}")
-        try:
-            await update.message.reply_text(
-                f"<b>❌ Failed to close group: {str(e)}</b>",
-                parse_mode='HTML'
-            )
-        except:
-            pass
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
