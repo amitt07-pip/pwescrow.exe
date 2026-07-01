@@ -1085,7 +1085,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Use HTML formatting
             success_message = f"""<b><u>Escrow Group Created</u></b>
 
-<b>Creator: {user_full_name}</b>
+<b>Creator: {html.escape(user_full_name)}</b>
 
 <b>Join this escrow group and share the link with the buyer and seller.</b>
 
@@ -1237,7 +1237,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Use HTML formatting
             success_message = f"""<b><u>Escrow Group Created</u></b>
 
-<b>Creator: {user_full_name}</b>
+<b>Creator: {html.escape(user_full_name)}</b>
 
 <b>Join this escrow group and share the link with the buyer and seller.</b>
 
