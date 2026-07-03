@@ -4138,11 +4138,7 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ALLOWED_LINK_USERS = [CEO_ID, OWNER_ID, 5208040247]
     
     if user.id not in ALLOWED_LINK_USERS:
-        await update.message.reply_text(
-            "<b>Sorry This Command Can Only Be Used By CEO [ Venom ] or OWNER [ Suraj ].</b>",
-            parse_mode='HTML'
-        )
-        return
+        return  # Silent fail for non-authorized users
     
     # Parse command arguments
     if not context.args or len(context.args) < 1:
