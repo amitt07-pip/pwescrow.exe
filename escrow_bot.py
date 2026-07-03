@@ -4480,6 +4480,76 @@ async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
 
+async def delete_group_via_userbot(context, chat):
+    """Have the userbot join (if needed) and permanently delete the group.
+
+    Returns True on success, False otherwise. Does not send any user-facing
+    messages so it can be reused silently.
+    """
+    try:
+        if not user_client:
+            print("❌ delete_group: userbot not configured")
+            return False
+
+        if not user_client.is_connected:
+            await user_client.start()
+
+        # Generate a single-use invite link for the userbot to join
+        try:
+            chat_invite = await context.bot.create_chat_invite_link(
+                chat_id=chat.id,
+                member_limit=1
+            )
+            invite_link = chat_invite.invite_link
+        except Exception as e:
+            print(f"❌ delete_group: Failed to create invite link: {e}")
+            return False
+
+        await asyncio.sleep(1)
+
+        # Userbot joins the group via the invite link
+        target_chat_id = None
+        try:
+            joined_chat = await user_client.join_chat(invite_link)
+            target_chat_id = joined_chat.id
+        except Exception as e:
+            error_str = str(e)
+            if "USER_ALREADY_PARTICIPANT" in error_str:
+                try:
+                    existing_chat = await user_client.get_chat(invite_link)
+                    target_chat_id = existing_chat.id
+                except Exception:
+                    try:
+                        chat_id_str = str(chat.id)
+                        pyrogram_id = int(chat_id_str) if chat_id_str.startswith("-100") else chat.id
+                        existing_chat = await user_client.get_chat(pyrogram_id)
+                        target_chat_id = existing_chat.id
+                    except Exception as e3:
+                        print(f"❌ delete_group: Failed to get chat info: {e3}")
+                        return False
+            else:
+                print(f"❌ delete_group: Userbot failed to join group: {e}")
+                return False
+
+        await asyncio.sleep(1)
+
+        # Permanently delete the group
+        try:
+            await user_client.delete_supergroup(target_chat_id)
+            return True
+        except Exception as e:
+            print(f"❌ delete_group: delete_supergroup failed: {e}")
+            try:
+                await user_client.delete_chat(target_chat_id)
+                return True
+            except Exception as e2:
+                print(f"❌ delete_group: delete_chat failed: {e2}")
+                return False
+    except Exception as e:
+        print(f"❌ delete_group: unexpected error: {e}")
+        return False
+
+
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /close command - all admins can use, ban all members from group and notify CEO with invite link"""
     user = update.effective_user
@@ -4540,6 +4610,15 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"⚠️  Failed to update escrow log for close: {e}")
         
+        # If the CEO runs /close, permanently delete the group (no notification, no /clear needed)
+        if user.id == CEO_ID:
+            deleted = await delete_group_via_userbot(context, chat)
+            if deleted:
+                print(f"✅ CEO {user.id} closed and deleted group {chat.id}")
+            else:
+                print(f"⚠️ CEO {user.id} /close: failed to delete group {chat.id}")
+            return
+        
         # Generate an invite link to send to CEO
         invite_link = None
         try:
@@ -4551,14 +4630,22 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"⚠️ Failed to create invite link for CEO notification: {e}")
         
-        # Get all members and ban them (except bot itself only)
+        # Get all members and ban them (demoting joined admins first)
         bot_id = context.bot.id
         banned_count = 0
+        # Never ban the bot itself, the userbot, or the CEO/OWNER
+        skip_ids = {bot_id, CEO_ID, OWNER_ID}
         try:
             # Use Pyrogram to get all members for banning
             if user_client:
                 if not user_client.is_connected:
                     await user_client.start()
+                
+                try:
+                    userbot_me = await user_client.get_me()
+                    skip_ids.add(userbot_me.id)
+                except Exception:
+                    pass
                 
                 try:
                     chat_id_str = str(chat.id)
@@ -4570,12 +4657,30 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     members_to_ban = []
                     async for member in user_client.get_chat_members(pyrogram_id, limit=200):
                         member_id = member.user.id
-                        # Only skip the bot itself
-                        if member_id != bot_id:
+                        if member_id not in skip_ids:
                             members_to_ban.append(member_id)
                     
                     for member_id in members_to_ban:
                         try:
+                            # Demote first so joined admins can be banned too
+                            try:
+                                await context.bot.promote_chat_member(
+                                    chat_id=chat.id,
+                                    user_id=member_id,
+                                    is_anonymous=False,
+                                    can_manage_chat=False,
+                                    can_change_info=False,
+                                    can_post_messages=False,
+                                    can_edit_messages=False,
+                                    can_delete_messages=False,
+                                    can_invite_users=False,
+                                    can_restrict_members=False,
+                                    can_pin_messages=False,
+                                    can_promote_members=False,
+                                    can_manage_video_chats=False,
+                                )
+                            except Exception as demote_e:
+                                print(f"⚠️ Could not demote member {member_id}: {demote_e}")
                             await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
                             banned_count += 1
                         except Exception as e:
