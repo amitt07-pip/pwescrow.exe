@@ -102,6 +102,9 @@ awaiting_stats_increase = {}
 # Pending changeaddy: {user_id: {'owner': 'amit'|'suraj', 'token': str, 'network': str}} - awaiting new address input
 awaiting_changeaddy = {}
 
+# Pending manual address: {user_id: target_chat_id} - awaiting manual escrow address input via /manual
+awaiting_manual_address = {}
+
 # Configurable escrow addresses: {owner: {network: address}}
 # Default addresses - can be changed via /changeaddy command
 escrow_addresses = {
@@ -5291,6 +5294,138 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
+async def refresh_deposit_message(context, target_chat_id, new_address):
+    """Update the pinned deposit message in a group to reflect a new escrow address."""
+    roles = escrow_roles.get(target_chat_id)
+    if not roles:
+        return
+
+    deposit_message_id = roles.get('deposit_message_id')
+    if not deposit_message_id:
+        return
+
+    try:
+        buyer_info = roles.get('buyer')
+        seller_info = roles.get('seller')
+        token = roles.get('selected_token')
+        network_label = roles.get('selected_network')
+        transaction_id = roles.get('transaction_id')
+        trade_start_time = roles.get('trade_start_time')
+
+        # Get current balance
+        monitored_balance = 0
+        if new_address in monitored_addresses:
+            monitored_balance = monitored_addresses[new_address]['total_balance']
+        baseline_balance = roles.get('baseline_balance', 0)
+        deal_balance = max(0, monitored_balance - baseline_balance)
+        manual_balance = roles.get('balance', 0)
+        current_balance = deal_balance + manual_balance
+
+        # Calculate remaining time
+        last_deposit_time = roles.get('last_deposit_time')
+        if last_deposit_time:
+            time_elapsed = (datetime.now() - last_deposit_time).total_seconds() / 60
+            remaining_time = max(0, 20 - time_elapsed)
+        else:
+            remaining_time = 20.00
+
+        # Determine group type
+        try:
+            target_chat = await context.bot.get_chat(target_chat_id)
+            is_otc_group = "OTC" in target_chat.title if target_chat.title else False
+        except Exception:
+            is_otc_group = False
+
+        if not (buyer_info and seller_info):
+            return
+
+        if is_otc_group:
+            payment_instruction = f"<b>Buyer [{buyer_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+        else:
+            payment_instruction = f"<b>Seller [{seller_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+
+        if is_otc_group:
+            release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
+        else:
+            release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
+
+        deposit_message_text = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
+
+⚡️ <b>SELLER</b>
+{seller_info['username']} | [{seller_info['user_id']}]
+⚡️ <b>BUYER</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
+🟢 <b>ESCROW ADDRESS</b>
+<code>{new_address}</code> <b>[{token}] [{network_label}]</b>
+
+{payment_instruction}
+
+Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}$]</u></b>
+
+⏰ <b>Trade Start Time: {trade_start_time}</b>
+⏰ <b>Address Reset In: {remaining_time:.2f} Min</b>
+
+📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
+<b>Useful commands:</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
+
+<b>Remember, once commands are used payment will be released, there is no revert!</b>"""
+
+        keyboard = [[InlineKeyboardButton("Check Payment", callback_data="check_payment_deposit")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await context.bot.edit_message_text(
+            chat_id=target_chat_id,
+            message_id=deposit_message_id,
+            text=deposit_message_text,
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"Warning: Could not update deposit message in group {target_chat_id}: {e}")
+
+
+async def manual_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /manual [chat id] command - CEO/OWNER only, manually set an escrow address for a chat."""
+    user = update.effective_user
+
+    # Restricted to CEO and OWNER
+    if user.id not in [CEO_ID, OWNER_ID]:
+        return  # Silent fail for non-authorized users
+
+    # Check if chat_id was provided
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "<b>Please use the proper format.\n\nEx:</b> /manual [chat_id]",
+            parse_mode='HTML'
+        )
+        return
+
+    try:
+        target_chat_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text(
+            "<b>Invalid chat ID. Please provide a valid numeric chat ID.</b>",
+            parse_mode='HTML'
+        )
+        return
+
+    current_address = escrow_roles.get(target_chat_id, {}).get('escrow_address', 'Not set')
+
+    # Remember which chat this admin is setting an address for
+    awaiting_manual_address[user.id] = target_chat_id
+
+    await update.message.reply_text(
+        f"<b>Manually set escrow address for chat:</b> <code>{target_chat_id}</code>\n"
+        f"<b>Current address:</b> <code>{current_address}</code>\n\n"
+        f"<b>Please send the address to set for deposit on this chat.</b>",
+        parse_mode='HTML'
+    )
+
+
 async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /setaddy command - CEO only, set escrow address for a specific chat"""
     user = update.effective_user
@@ -6009,6 +6144,42 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
         print(f"✅ CEO changed {owner_name}'s {network} address from {old_address} to {new_address}")
         return
     
+    # Handle manual escrow address input (/manual command)
+    if caller_id in awaiting_manual_address:
+        target_chat_id = awaiting_manual_address[caller_id]
+        new_address = (update.message.text or "").strip()
+
+        if not new_address:
+            await update.message.reply_text("<b>Please send a valid address.</b>", parse_mode='HTML')
+            return
+
+        if target_chat_id not in escrow_roles:
+            escrow_roles[target_chat_id] = {}
+
+        old_address = escrow_roles[target_chat_id].get('escrow_address')
+
+        # Set the manual escrow address for this chat
+        escrow_roles[target_chat_id]['escrow_address'] = new_address
+
+        # Transfer monitoring from old address to new address
+        if old_address and old_address in monitored_addresses:
+            monitored_addresses[new_address] = monitored_addresses.pop(old_address)
+
+        # Refresh the pinned deposit message in the target group
+        await refresh_deposit_message(context, target_chat_id, new_address)
+
+        del awaiting_manual_address[caller_id]
+
+        await update.message.reply_text(
+            f"<b>Escrow address set successfully!</b>\n\n"
+            f"<b>Chat:</b> <code>{target_chat_id}</code>\n"
+            f"<b>Old address:</b> <code>{old_address or 'Not set'}</code>\n"
+            f"<b>New address:</b> <code>{new_address}</code>",
+            parse_mode='HTML'
+        )
+        print(f"✅ Manual escrow address set for chat {target_chat_id}: {new_address}")
+        return
+    
     chat = update.effective_chat
     chat_id = chat.id
     
@@ -6119,6 +6290,7 @@ def main():
     app.add_handler(CommandHandler("empty", empty_command))
     app.add_handler(CommandHandler("setaddy", setaddy_command))
     app.add_handler(CommandHandler("changeaddy", changeaddy_command))
+    app.add_handler(CommandHandler("manual", manual_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
