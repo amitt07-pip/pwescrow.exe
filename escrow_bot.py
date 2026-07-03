@@ -5227,8 +5227,20 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "0x4de23f3f0fb3318287378abdde030cf61714b2f3"  # BEP20 test address
     }
     
-    # Check if the provided address matches any bot address (case-insensitive)
-    if provided_address.lower() in bot_addresses:
+    # Also treat any address currently assigned to a deal (e.g. via /manual or
+    # /setaddy) or being monitored as a valid bot address
+    dynamic_addresses = set()
+    for roles in escrow_roles.values():
+        assigned_address = roles.get('escrow_address')
+        if assigned_address:
+            dynamic_addresses.add(assigned_address.lower())
+    for monitored_address in monitored_addresses:
+        dynamic_addresses.add(monitored_address.lower())
+
+    all_valid_addresses = {addr.lower() for addr in bot_addresses} | dynamic_addresses
+
+    # Check if the provided address matches any known address (case-insensitive)
+    if provided_address.lower() in all_valid_addresses:
         # Find which deal this address is assigned to
         deal_chat_id = None
         
