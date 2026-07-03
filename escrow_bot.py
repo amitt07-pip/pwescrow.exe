@@ -7,7 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMem
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, filters
 from pyrogram import Client, enums
 from pyrogram.errors import FloodWait
-from pyrogram.types import ChatPrivileges
+from pyrogram.types import ChatPrivileges, ChatPermissions
 import os
 import hashlib
 import base64
@@ -155,6 +155,35 @@ def save_escrow_addresses():
         os.replace(temp_file, ESCROW_ADDRESSES_FILE)
     except IOError as e:
         print(f"⚠️ Failed to save escrow addresses file: {e}")
+
+async def enable_member_invites(user_client, chat_id):
+    """Ensure regular members are allowed to add/invite other members.
+
+    Members should be able to add people directly instead of relying only on
+    the (2-use, expiring) invite link.
+    """
+    try:
+        chat = await user_client.get_chat(chat_id)
+        permissions = getattr(chat, 'permissions', None)
+        if permissions is not None:
+            # Reuse the group's existing permissions object and just flip the
+            # invite right, so we stay compatible across pyrogram versions.
+            permissions.can_invite_users = True
+        else:
+            permissions = ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_send_polls=True,
+                can_invite_users=True,
+                can_pin_messages=True,
+                can_change_info=False,
+            )
+        await user_client.set_chat_permissions(chat_id, permissions)
+        print(f"✅ Enabled member add/invite permission for chat {chat_id}")
+    except Exception as e:
+        print(f"⚠️ Could not enable member invite permission for chat {chat_id}: {e}")
 
 def load_blacklist():
     """Load blacklisted users from file on startup."""
@@ -1053,6 +1082,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
+
+            # Allow regular members to add other members directly
+            await enable_member_invites(user_client, supergroup.id)
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -1205,6 +1237,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
+
+            # Allow regular members to add other members directly
+            await enable_member_invites(user_client, supergroup.id)
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -1350,7 +1385,10 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 creates_join_request=True
             )
             invite_link = invite_link_obj.invite_link
-            
+
+            # Allow regular members to add other members directly
+            await enable_member_invites(user_client, supergroup.id)
+
             # Send welcome message inside the group
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
 ✅ Please start with /dd command and fill the DealInfo Form"""
@@ -5893,6 +5931,16 @@ async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(result_msg, parse_mode='HTML')
     print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {left_count} left, {failed_count} failed")
 
+async def delete_service_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-delete 'X added Y' / join / leave service messages in escrow groups."""
+    if not update.message:
+        return
+    try:
+        await update.message.delete()
+    except Exception as e:
+        print(f"Could not delete service message in chat {update.effective_chat.id}: {e}")
+
+
 async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle join requests for direct escrow groups - only approve initiator and counterparty"""
     join_request = update.chat_join_request
@@ -6294,6 +6342,11 @@ def main():
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
+    # Auto-delete "X added Y" / join / leave service messages in escrow groups
+    app.add_handler(MessageHandler(
+        filters.StatusUpdate.NEW_CHAT_MEMBERS | filters.StatusUpdate.LEFT_CHAT_MEMBER,
+        delete_service_messages
+    ))
     # Message handler to capture deal details (Quantity/Amount) after /dd command
     # Handles both text messages and captions on photos/documents
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
