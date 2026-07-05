@@ -33,8 +33,9 @@ PHONE = os.getenv("TELEGRAM_PHONE", "")
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098,7422906767,7962772947,7338429782,5208040247")
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip()]
 
-# Admin IDs excluded from auto-promotion in disputes (they won't be promoted when joining via dispute link)
-DISPUTE_EXCLUDE_IDS = {7338429782}
+# Admin IDs excluded from auto-promotion (CEO and OWNER stay regular members when
+# joining bot-made groups; they won't be auto-promoted to admin)
+DISPUTE_EXCLUDE_IDS = {7338429782, 6864194951}
 # Admins who will be auto-promoted when joining via dispute link
 DISPUTE_ADMIN_IDS = [i for i in ADMIN_IDS if i not in DISPUTE_EXCLUDE_IDS]
 
