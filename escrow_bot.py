@@ -30,12 +30,12 @@ API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 PHONE = os.getenv("TELEGRAM_PHONE", "")
 
 # Admin user IDs (comma-separated)
-ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098,7422906767,7962772947,7338429782,5208040247")
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098,7422906767,7962772947,6643621069,5208040247")
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip()]
 
 # Admin IDs excluded from auto-promotion (CEO and OWNER stay regular members when
 # joining bot-made groups; they won't be auto-promoted to admin)
-DISPUTE_EXCLUDE_IDS = {7338429782, 6864194951}
+DISPUTE_EXCLUDE_IDS = {6643621069, 6864194951}
 # Admins who will be auto-promoted when joining via dispute link
 DISPUTE_ADMIN_IDS = [i for i in ADMIN_IDS if i not in DISPUTE_EXCLUDE_IDS]
 
@@ -124,7 +124,7 @@ escrow_addresses = {
 }
 
 # CEO and OWNER IDs for restricted commands
-CEO_ID = 7338429782
+CEO_ID = 6643621069
 OWNER_ID = 6864194951
 
 # Blacklist file path (relative to script directory)
@@ -4134,7 +4134,7 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     # Check if user is CEO (Venom) or OWNER (Suraj) or authorized admin
-    CEO_ID = 7338429782
+    CEO_ID = 6643621069
     OWNER_ID = 6864194951
     ALLOWED_LINK_USERS = [CEO_ID, OWNER_ID, 5208040247]
     
