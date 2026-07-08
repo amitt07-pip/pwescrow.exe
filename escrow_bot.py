@@ -4631,11 +4631,12 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print(f"⚠️ Failed to create invite link for CEO notification: {e}")
         
-        # Get all members and ban them (demoting joined admins first)
+        # Get all members and ban them (demoting joined admins first) so that
+        # only the bot and the userbot remain in the group afterwards
         bot_id = context.bot.id
         banned_count = 0
-        # Never ban the bot itself, the userbot, or the CEO/OWNER
-        skip_ids = {bot_id, CEO_ID, OWNER_ID}
+        # Only ever keep the bot itself and the userbot
+        skip_ids = {bot_id}
         try:
             # Use Pyrogram to get all members for banning
             if user_client:
@@ -4662,30 +4663,37 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             members_to_ban.append(member_id)
                     
                     for member_id in members_to_ban:
+                        # Demote first (via the userbot, which is the group creator
+                        # and can demote any admin) so admins can be banned too
                         try:
-                            # Demote first so joined admins can be banned too
-                            try:
-                                await context.bot.promote_chat_member(
-                                    chat_id=chat.id,
-                                    user_id=member_id,
-                                    is_anonymous=False,
+                            await user_client.promote_chat_member(
+                                chat_id=pyrogram_id,
+                                user_id=member_id,
+                                privileges=ChatPrivileges(
                                     can_manage_chat=False,
-                                    can_change_info=False,
-                                    can_post_messages=False,
-                                    can_edit_messages=False,
                                     can_delete_messages=False,
-                                    can_invite_users=False,
-                                    can_restrict_members=False,
-                                    can_pin_messages=False,
-                                    can_promote_members=False,
                                     can_manage_video_chats=False,
+                                    can_restrict_members=False,
+                                    can_promote_members=False,
+                                    can_change_info=False,
+                                    can_invite_users=False,
+                                    can_pin_messages=False,
+                                    is_anonymous=False,
                                 )
-                            except Exception as demote_e:
-                                print(f"⚠️ Could not demote member {member_id}: {demote_e}")
+                            )
+                        except Exception as demote_e:
+                            print(f"⚠️ Userbot could not demote member {member_id}: {demote_e}")
+                        # Ban the (now regular) member
+                        try:
                             await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
                             banned_count += 1
                         except Exception as e:
-                            print(f"⚠️ Failed to ban member {member_id}: {e}")
+                            # Fallback: ban via the userbot
+                            try:
+                                await user_client.ban_chat_member(pyrogram_id, member_id)
+                                banned_count += 1
+                            except Exception as e2:
+                                print(f"⚠️ Failed to ban member {member_id}: {e} / {e2}")
                     
                 except Exception as e:
                     print(f"⚠️ Failed to get members via Pyrogram: {e}")
