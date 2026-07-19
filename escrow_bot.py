@@ -4,7 +4,7 @@ if sys.version_info >= (3, 13):
     sys.modules["imghdr"] = types.ModuleType("imghdr")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, TypeHandler, filters
 from pyrogram import Client, enums
 from pyrogram.errors import FloodWait
 from pyrogram.types import ChatPrivileges, ChatPermissions
@@ -6432,6 +6432,11 @@ def main():
         .build()
     )
     
+    # Add a 1-second delay before handling/responding to every update
+    async def response_delay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await asyncio.sleep(1)
+    app.add_handler(TypeHandler(Update, response_delay), group=-1)
+
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("escrow", escrow_command))
