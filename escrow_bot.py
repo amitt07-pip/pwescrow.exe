@@ -4,7 +4,8 @@ if sys.version_info >= (3, 13):
     sys.modules["imghdr"] = types.ModuleType("imghdr")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, TypeHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, ExtBot, filters
+from telegram.request import HTTPXRequest
 from pyrogram import Client, enums
 from pyrogram.errors import FloodWait
 from pyrogram.types import ChatPrivileges, ChatPermissions
@@ -6400,6 +6401,53 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
     else:
         print(f"  No quantity/amount pattern found in message")
 
+RESPONSE_DELAY_SECONDS = 1
+
+
+class DelayedBot(ExtBot):
+    """Bot that waits 1 second before every outgoing message/edit.
+
+    This adds a delay before the first response and a 1-second gap between
+    consecutive messages sent by the bot.
+    """
+
+    async def send_message(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().send_message(*args, **kwargs)
+
+    async def send_photo(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().send_photo(*args, **kwargs)
+
+    async def send_document(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().send_document(*args, **kwargs)
+
+    async def send_video(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().send_video(*args, **kwargs)
+
+    async def send_animation(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().send_animation(*args, **kwargs)
+
+    async def send_media_group(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().send_media_group(*args, **kwargs)
+
+    async def copy_message(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().copy_message(*args, **kwargs)
+
+    async def edit_message_text(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().edit_message_text(*args, **kwargs)
+
+    async def edit_message_caption(self, *args, **kwargs):
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        return await super().edit_message_caption(*args, **kwargs)
+
+
 def main():
     # Load blacklist, global fee, saved addresses, and deal stats from file on startup
     load_blacklist()
@@ -6422,20 +6470,18 @@ def main():
         print("   Get credentials from https://my.telegram.org/apps")
         print("")
     
-    # Build app with optimized settings for faster response
+    # Build app with a custom bot that adds a 1-second delay before every message
+    delayed_bot = DelayedBot(
+        token=BOT_TOKEN,
+        request=HTTPXRequest(connection_pool_size=8, pool_timeout=30.0),
+        get_updates_request=HTTPXRequest(connection_pool_size=8, pool_timeout=30.0),
+    )
     app = (
         ApplicationBuilder()
-        .token(BOT_TOKEN)
+        .bot(delayed_bot)
         .concurrent_updates(True)  # Handle multiple updates concurrently
-        .pool_timeout(30.0)  # Faster timeout for connections
-        .connection_pool_size(8)  # More concurrent connections
         .build()
     )
-    
-    # Add a 1-second delay before handling/responding to every update
-    async def response_delay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await asyncio.sleep(1)
-    app.add_handler(TypeHandler(Update, response_delay), group=-1)
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("menu", menu_command))
