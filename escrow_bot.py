@@ -5550,11 +5550,11 @@ Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}
 
 
 async def manual_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /manual [chat id] command - CEO/OWNER only, manually set an escrow address for a chat."""
+    """Handle /manual [chat id] command - admins only, manually set an escrow address for a chat."""
     user = update.effective_user
 
-    # Restricted to CEO and OWNER
-    if user.id not in [CEO_ID, OWNER_ID]:
+    # Restricted to admins
+    if user.id not in ADMIN_IDS:
         return  # Silent fail for non-authorized users
 
     # Check if chat_id was provided
