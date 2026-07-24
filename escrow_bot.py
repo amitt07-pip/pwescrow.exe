@@ -3550,9 +3550,8 @@ Amount Recieved: <code>{initial_balance:.5f}</code> <b><u>[{initial_balance:.2f}
     keyboard = [[InlineKeyboardButton("Check Payment", callback_data="check_payment_deposit")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Delete waiting message
-    await waiting_msg.delete()
-    
+    # Keep the "Requesting a deposit address..." message (do not delete it)
+
     # Send deposit information as reply to /deposit command
     deposit_msg = await update.message.reply_text(deposit_message, parse_mode='HTML', reply_markup=reply_markup)
     
