@@ -6401,13 +6401,13 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
     else:
         print(f"  No quantity/amount pattern found in message")
 
-RESPONSE_DELAY_SECONDS = 1
+RESPONSE_DELAY_SECONDS = 3
 
 
 class DelayedBot(ExtBot):
-    """Bot that waits 1 second before every outgoing message/edit.
+    """Bot that waits RESPONSE_DELAY_SECONDS before every outgoing message/edit.
 
-    This adds a delay before the first response and a 1-second gap between
+    This adds a delay before the first response and a matching gap between
     consecutive messages sent by the bot.
     """
 
