@@ -107,6 +107,36 @@ awaiting_changeaddy = {}
 # Pending manual address: {user_id: target_chat_id} - awaiting manual escrow address input via /manual
 awaiting_manual_address = {}
 
+# Full user stats keyed by user id: {user_id: {field: value, ...}} - shown by /stats, set by /clonestats
+user_stats = {}
+
+# Pending clonestats: {admin_id: target_user_id} - awaiting a formatted stats block via /clonestats
+awaiting_clonestats = {}
+
+# Default values for the /stats display
+DEFAULT_USER_STATS = {
+    'total_escrows': '0',
+    'total_tickets': '0',
+    'ranking': 'None',
+    'total_worth': '0.00$',
+    'fastest_escrow': '0',
+    'first_escrow_time': 'None',
+    'last_escrow_time': 'None',
+    'last_escrow_worth': '0.00$',
+}
+
+# (storage_key, label as it appears in the message) - used to render and parse stats
+STAT_FIELDS = [
+    ('total_escrows', 'Total Escrows'),
+    ('total_tickets', 'Total Tickets'),
+    ('ranking', 'Ranking'),
+    ('total_worth', 'Total Worth'),
+    ('fastest_escrow', 'Fastest Escrow'),
+    ('first_escrow_time', 'First Escrow Time'),
+    ('last_escrow_time', 'Last Escrow Time'),
+    ('last_escrow_worth', 'Last Escrow Worth'),
+]
+
 # Configurable escrow addresses: {owner: {network: address}}
 # Default addresses - can be changed via /changeaddy command
 escrow_addresses = {
@@ -133,6 +163,7 @@ BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "black
 GLOBAL_FEE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_fee.json")
 SAVED_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_addresses.json")
 USER_STATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_deal_stats.json")
+USER_STATS_FULL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_stats.json")
 ESCROW_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "escrow_addresses.json")
 
 def load_escrow_addresses():
@@ -281,6 +312,60 @@ def save_user_deal_stats():
         os.replace(temp_file, USER_STATS_FILE)
     except IOError as e:
         print(f"⚠️ Failed to save user deal stats file: {e}")
+
+def load_user_stats():
+    """Load full per-user stats (for /stats) from file on startup."""
+    global user_stats
+    try:
+        if os.path.exists(USER_STATS_FULL_FILE):
+            with open(USER_STATS_FULL_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    user_stats = {int(k): v for k, v in data.items()}
+                    print(f"✅ Loaded full stats for {len(user_stats)} users")
+    except (json.JSONDecodeError, IOError, ValueError) as e:
+        print(f"⚠️ Failed to load user stats file: {e}")
+
+def save_user_stats():
+    """Save full per-user stats to file."""
+    try:
+        temp_file = USER_STATS_FULL_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({str(k): v for k, v in user_stats.items()}, f)
+        os.replace(temp_file, USER_STATS_FULL_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save user stats file: {e}")
+
+def format_stats_message(user_id, username_display):
+    """Build the formatted /stats message for a user id."""
+    stats = {**DEFAULT_USER_STATS, **user_stats.get(user_id, {})}
+    return (
+        "<b><u>User Stats</u></b>\n\n"
+        f"👤 <b>Username:</b> {html.escape(username_display)} [{user_id}]\n"
+        f"📍 <b>Total Escrows:</b> {html.escape(str(stats['total_escrows']))}\n"
+        f"🎟 <b>Total Tickets:</b> {html.escape(str(stats['total_tickets']))}\n"
+        f"🎉 <b>Ranking:</b> {html.escape(str(stats['ranking']))}\n"
+        f"💰 <b>Total Worth:</b> {html.escape(str(stats['total_worth']))}\n"
+        f"⏰ <b>Fastest Escrow:</b> {html.escape(str(stats['fastest_escrow']))}\n"
+        f"⏰ <b>First Escrow Time:</b> {html.escape(str(stats['first_escrow_time']))}\n"
+        f"⏰ <b>Last Escrow Time:</b> {html.escape(str(stats['last_escrow_time']))}\n"
+        f"💰 <b>Last Escrow Worth:</b> {html.escape(str(stats['last_escrow_worth']))}"
+    )
+
+def parse_stats_block(text):
+    """Parse a pasted stats block into {field: value}. Ignores missing fields."""
+    result = {}
+    for key, label in STAT_FIELDS:
+        for line in text.split('\n'):
+            clean = re.sub(r'<[^>]+>', '', line)
+            marker = label + ':'
+            idx = clean.find(marker)
+            if idx != -1:
+                value = clean[idx + len(marker):].strip()
+                if value:
+                    result[key] = value
+                break
+    return result
 
 def get_escrow_fee_percent(both_have_bio: bool) -> float:
     """Get the escrow fee percent based on global setting and bio status."""
@@ -2669,6 +2754,18 @@ Thank you for using @PagaLEscrowBot 🙌
             parse_mode='HTML'
         )
     
+    elif query.data == "stats_yesterday":
+        await query.edit_message_text(
+            "<b>Yesterday stats does not exists!</b>",
+            parse_mode='HTML'
+        )
+
+    elif query.data == "stats_last30":
+        await query.edit_message_text(
+            "<b>Last 30 Days global stats does not exists!</b>",
+            parse_mode='HTML'
+        )
+
     elif query.data == "mystats_increase" or query.data.startswith("mystats_increase_"):
         caller_id = query.from_user.id
         await query.answer()
@@ -5548,6 +5645,87 @@ Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}
         print(f"Warning: Could not update deposit message in group {target_chat_id}: {e}")
 
 
+def _username_display(user):
+    """Return @username if available, otherwise the user's full name."""
+    if user is None:
+        return "Unknown"
+    if getattr(user, 'username', None):
+        return f"@{user.username}"
+    return user.full_name or "Unknown"
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stats command - anyone can view their own stats."""
+    user = update.effective_user
+    message = format_stats_message(user.id, _username_display(user))
+    keyboard = [[
+        InlineKeyboardButton("Yesterday", callback_data="stats_yesterday"),
+        InlineKeyboardButton("Last 30 Days", callback_data="stats_last30"),
+    ]]
+    await update.message.reply_text(
+        message,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def clonestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /clonestats command - admins only, clone a pasted stats block onto a target user.
+
+    Target resolution: reply to a message, or /clonestats @username, or /clonestats <user_id>,
+    or /clonestats alone to target the admin themselves.
+    """
+    user = update.effective_user
+
+    if user.id not in ADMIN_IDS:
+        return  # Silent fail for non-authorized users
+
+    target_user_id = None
+    target_display = None
+
+    # 1) Reply to a message
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        target = update.message.reply_to_message.from_user
+        target_user_id = target.id
+        target_display = _username_display(target)
+    # 2) Argument: @username or numeric id
+    elif context.args:
+        arg = context.args[0].strip()
+        if arg.startswith('@'):
+            try:
+                chat = await context.bot.get_chat(arg)
+                target_user_id = chat.id
+                target_display = _username_display(chat)
+            except Exception:
+                await update.message.reply_text(
+                    "<b>Could not find that username. Have them message the bot first, or use their numeric ID.</b>",
+                    parse_mode='HTML'
+                )
+                return
+        else:
+            try:
+                target_user_id = int(arg)
+                target_display = f"[{target_user_id}]"
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>Invalid target. Use /clonestats @username, /clonestats &lt;user_id&gt;, reply to a user, or /clonestats alone for yourself.</b>",
+                    parse_mode='HTML'
+                )
+                return
+    # 3) No target -> self
+    else:
+        target_user_id = user.id
+        target_display = _username_display(user)
+
+    awaiting_clonestats[user.id] = target_user_id
+
+    await update.message.reply_text(
+        f"<b>Cloning stats to:</b> {html.escape(target_display)} <code>[{target_user_id}]</code>\n\n"
+        f"<b>Now send the formatted stats block with the values to clone.</b>",
+        parse_mode='HTML'
+    )
+
+
 async def manual_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /manual [chat id] command - admins only, manually set an escrow address for a chat."""
     user = update.effective_user
@@ -6314,6 +6492,34 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
         print(f"✅ CEO changed {owner_name}'s {network} address from {old_address} to {new_address}")
         return
     
+    # Handle clonestats block input (/clonestats command)
+    if caller_id in awaiting_clonestats:
+        target_user_id = awaiting_clonestats[caller_id]
+        block_text = update.message.text or update.message.caption or ""
+        parsed = parse_stats_block(block_text)
+
+        if not parsed:
+            await update.message.reply_text(
+                "<b>Could not read any stats from that message. Please send the same formatted stats block with values.</b>",
+                parse_mode='HTML'
+            )
+            return
+
+        existing = user_stats.get(target_user_id, {})
+        existing.update(parsed)
+        user_stats[target_user_id] = existing
+        save_user_stats()
+
+        del awaiting_clonestats[caller_id]
+
+        await update.message.reply_text(
+            f"<b>Stats cloned successfully to</b> <code>[{target_user_id}]</code>!\n\n"
+            f"{format_stats_message(target_user_id, f'[{target_user_id}]')}",
+            parse_mode='HTML'
+        )
+        print(f"✅ Admin {caller_id} cloned stats to user {target_user_id}: {parsed}")
+        return
+
     # Handle manual escrow address input (/manual command)
     if caller_id in awaiting_manual_address:
         target_chat_id = awaiting_manual_address[caller_id]
@@ -6453,6 +6659,7 @@ def main():
     load_global_fee()
     load_saved_addresses()
     load_user_deal_stats()
+    load_user_stats()
     load_escrow_addresses()
     
     if not BOT_TOKEN:
@@ -6511,6 +6718,8 @@ def main():
     app.add_handler(CommandHandler("setaddy", setaddy_command))
     app.add_handler(CommandHandler("changeaddy", changeaddy_command))
     app.add_handler(CommandHandler("manual", manual_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("clonestats", clonestats_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(handle_join_request))
