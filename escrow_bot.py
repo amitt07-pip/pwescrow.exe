@@ -6606,7 +6606,7 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
     else:
         print(f"  No quantity/amount pattern found in message")
 
-RESPONSE_DELAY_SECONDS = 2
+RESPONSE_DELAY_SECONDS = 1.5
 
 
 class DelayedBot(ExtBot):
