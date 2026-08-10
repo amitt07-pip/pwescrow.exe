@@ -4,8 +4,9 @@ if sys.version_info >= (3, 13):
     sys.modules["imghdr"] = types.ModuleType("imghdr")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, ExtBot, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, ExtBot, TypeHandler, filters
 from telegram.request import HTTPXRequest
+import contextvars
 from pyrogram import Client, enums
 from pyrogram.errors import FloodWait
 from pyrogram.types import ChatPrivileges, ChatPermissions
@@ -916,10 +917,25 @@ Remember without it disputes wouldn't be resolved. Once filled proceed with Spec
     await update_escrow_log(context, chat_id, new_status="Form Sent..")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button callbacks.
+
+    The callback query is answered only after the work is done, so Telegram keeps
+    showing its "Loading" state on the button while the bot prepares the response.
+    """
+    query = update.callback_query
+    try:
+        await _handle_button_callback(update, context)
+    finally:
+        try:
+            await query.answer()
+        except Exception:
+            pass  # Already answered by a branch, or the query expired
+
+
+async def _handle_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks"""
     global user_client, escrow_roles, monitored_addresses
     query = update.callback_query
-    await query.answer()
     
     if query.data == "commands_list":
         commands_message = """📌 AVAILABLE COMMANDS
@@ -6608,48 +6624,62 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
 
 RESPONSE_DELAY_SECONDS = 1.5
 
+# Set per update: True when the update came from an admin, who gets no response delay
+skip_response_delay = contextvars.ContextVar("skip_response_delay", default=False)
+
+
+async def tag_admin_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mark updates coming from admins so their responses skip the delay."""
+    user = update.effective_user
+    skip_response_delay.set(bool(user and user.id in ADMIN_IDS))
+
 
 class DelayedBot(ExtBot):
     """Bot that waits RESPONSE_DELAY_SECONDS before every outgoing message/edit.
 
     This adds a delay before the first response and a matching gap between
-    consecutive messages sent by the bot.
+    consecutive messages sent by the bot. Responses to admins are not delayed.
     """
 
-    async def send_message(self, *args, **kwargs):
+    async def _delay(self):
+        if skip_response_delay.get():
+            return
         await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+
+    async def send_message(self, *args, **kwargs):
+        await self._delay()
         return await super().send_message(*args, **kwargs)
 
     async def send_photo(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().send_photo(*args, **kwargs)
 
     async def send_document(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().send_document(*args, **kwargs)
 
     async def send_video(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().send_video(*args, **kwargs)
 
     async def send_animation(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().send_animation(*args, **kwargs)
 
     async def send_media_group(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().send_media_group(*args, **kwargs)
 
     async def copy_message(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().copy_message(*args, **kwargs)
 
     async def edit_message_text(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().edit_message_text(*args, **kwargs)
 
     async def edit_message_caption(self, *args, **kwargs):
-        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+        await self._delay()
         return await super().edit_message_caption(*args, **kwargs)
 
 
@@ -6688,6 +6718,9 @@ def main():
         .concurrent_updates(True)  # Handle multiple updates concurrently
         .build()
     )
+
+    # Runs before every other handler: admins get no response delay
+    app.add_handler(TypeHandler(Update, tag_admin_update), group=-1)
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("menu", menu_command))
