@@ -421,19 +421,44 @@ ESCROW_STATUS_STAGES = {
     "Deal Closed": 9
 }
 
+ROLE_LOG_LABELS = {'buyer': 'Buyer', 'seller': 'Seller'}
+
+
 def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username="Not set", 
                               deal_amount="Not set", group_type="P2P", current_status="Group Created",
-                              initiator_username="Not set"):
-    """Build the escrow log message with current data"""
-    return f"""<b>NEW ESCROW DEAL CREATED</b>
+                              initiator_username="Not set", role_order=None):
+    """Build the escrow log message with current data.
 
-🆔 <b>Chat ID:</b> <code>{chat_id}</code>
-👤 <b>Initiated by:</b> {initiator_username}
-👤 <b>Buyer:</b> {buyer_username}
-👤 <b>Seller:</b> {seller_username}
-💸 <b>Deal Amount:</b> {deal_amount}
-🔖 <b>Group Type:</b> {group_type}
-<b>Current Status:</b> {current_status}"""
+    Role lines are only shown once that role is set, in the order the roles were
+    set. The status line only shows once both roles are set.
+    """
+    usernames = {'buyer': buyer_username, 'seller': seller_username}
+    if not role_order:
+        role_order = [
+            role for role in ('buyer', 'seller')
+            if usernames.get(role) and usernames[role] != 'Not set'
+        ]
+
+    lines = ["<b>PAGAL ESCROW BOT</b>", ""]
+    for role in role_order:
+        lines.append(f"👤 <b>{ROLE_LOG_LABELS[role]}:</b> {usernames.get(role, 'Not set')}")
+    lines.append(f"🔖 <b>Group TYPE:</b> {group_type}")
+
+    if len(role_order) >= 2:
+        lines.append(f"<b>Status:</b> {current_status}")
+
+    lines.extend(["", "Deal Information will be updated as soon as its fulfilled"])
+    return "\n".join(lines)
+
+
+def build_escrow_log_markup(chat_id):
+    """DEAL INFO button - only shown once the /dd form has been filled by a user."""
+    deal_details = escrow_roles.get(chat_id, {}).get('log_data', {}).get('deal_details')
+    if not deal_details:
+        return None
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("DEAL INFO", callback_data=f"dealinfo_{chat_id}")
+    ]])
 
 async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=None, seller_username=None, deal_amount=None, initiator_username=None):
     """Send initial escrow log to logs channel and store message ID"""
@@ -455,8 +480,13 @@ async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=Non
                 'group_type': group_type,
                 'current_status': 'Group Created',
                 'status_stage': 0,
-                'initiator_username': initiator_username or 'Not set'
+                'initiator_username': initiator_username or 'Not set',
+                'role_order': [],
+                'deal_details': None
             }
+            for role, value in (('buyer', buyer_username), ('seller', seller_username)):
+                if value:
+                    escrow_roles[chat_id]['log_data']['role_order'].append(role)
         else:
             # Update with provided values if they exist
             if buyer_username:
@@ -468,18 +498,23 @@ async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=Non
             if initiator_username:
                 escrow_roles[chat_id]['log_data']['initiator_username'] = initiator_username
         
+        log_data = escrow_roles[chat_id]['log_data']
         log_message = build_escrow_log_message(
             chat_id=chat_id,
+            buyer_username=log_data.get('buyer_username', 'Not set'),
+            seller_username=log_data.get('seller_username', 'Not set'),
             group_type=group_type,
             current_status="Group Created",
-            initiator_username=escrow_roles[chat_id]['log_data'].get('initiator_username', 'Not set')
+            initiator_username=log_data.get('initiator_username', 'Not set'),
+            role_order=log_data.get('role_order')
         )
         
         print(f"📤 Sending escrow log to channel {LOGS_CHANNEL_ID}...")
         sent_msg = await context.bot.send_message(
             chat_id=LOGS_CHANNEL_ID,
             text=log_message,
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=build_escrow_log_markup(chat_id)
         )
         
         # Store the message ID for later updates
@@ -508,11 +543,16 @@ async def update_escrow_log(context, chat_id, new_status=None, buyer_username=No
     
     log_data = escrow_roles[chat_id].get('log_data', {})
     
-    # Update fields if provided
+    # Update fields if provided, remembering the order the roles were set in
+    role_order = log_data.setdefault('role_order', [])
     if buyer_username is not None:
         log_data['buyer_username'] = buyer_username
+        if 'buyer' not in role_order:
+            role_order.append('buyer')
     if seller_username is not None:
         log_data['seller_username'] = seller_username
+        if 'seller' not in role_order:
+            role_order.append('seller')
     if deal_amount is not None:
         log_data['deal_amount'] = deal_amount
     
@@ -543,7 +583,8 @@ async def update_escrow_log(context, chat_id, new_status=None, buyer_username=No
         deal_amount=log_data.get('deal_amount', 'Not set'),
         group_type=log_data.get('group_type', 'P2P'),
         current_status=log_data.get('current_status', 'Group Created'),
-        initiator_username=log_data.get('initiator_username', 'Not set')
+        initiator_username=log_data.get('initiator_username', 'Not set'),
+        role_order=log_data.get('role_order')
     )
     
     try:
@@ -551,7 +592,8 @@ async def update_escrow_log(context, chat_id, new_status=None, buyer_username=No
             chat_id=LOGS_CHANNEL_ID,
             message_id=log_message_id,
             text=log_message,
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=build_escrow_log_markup(chat_id)
         )
         print(f"✅ Updated escrow log for chat {chat_id}: {log_data.get('current_status')}")
     except Exception as e:
@@ -2770,6 +2812,25 @@ Thank you for using @PagaLEscrowBot 🙌
             parse_mode='HTML'
         )
     
+    elif query.data.startswith("dealinfo_"):
+        target_chat_id = int(query.data.split("_", 1)[1])
+        deal_details = escrow_roles.get(target_chat_id, {}).get('log_data', {}).get('deal_details')
+
+        if not deal_details:
+            await query.answer("Deal information not filled yet.", show_alert=True)
+            return
+
+        if len(deal_details) <= 190:
+            await query.answer(deal_details, show_alert=True)
+        else:
+            await query.answer()
+            await context.bot.send_message(
+                chat_id=LOGS_CHANNEL_ID,
+                text=f"<b>DEAL INFO</b>\n\n{html.escape(deal_details)}",
+                parse_mode='HTML',
+                reply_to_message_id=query.message.message_id
+            )
+
     elif query.data == "stats_yesterday":
         await query.edit_message_text(
             "<b>Yesterday stats does not exists!</b>",
@@ -6612,6 +6673,10 @@ async def handle_deal_details_message(update: Update, context: ContextTypes.DEFA
         # Clean up the deal amount (limit length, escape HTML)
         deal_amount = deal_amount.strip()[:50]
         deal_amount = html.escape(deal_amount)
+        
+        # Keep the filled form so the log's DEAL INFO button can show it
+        if chat_id in escrow_roles and 'log_data' in escrow_roles[chat_id]:
+            escrow_roles[chat_id]['log_data']['deal_details'] = message_text.strip()[:3000]
         
         # Update the escrow log with the deal amount
         await update_escrow_log(context, chat_id, deal_amount=deal_amount)
