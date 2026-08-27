@@ -2911,16 +2911,14 @@ Thank you for using @PagaLEscrowBot 🙌
             await query.answer("⚠️ No network selected for this deal!", show_alert=True)
             return
         
-        # Get address from configurable escrow_addresses
-        amit_addr = escrow_addresses.get("amit", {}).get(network)
-        suraj_addr = escrow_addresses.get("suraj", {}).get(network)
+        # Always take the address currently assigned in the bot (incl. /changeaddy)
+        new_address = escrow_addresses.get(owner, {}).get(network)
         
-        if not amit_addr or not suraj_addr:
+        if not new_address:
             await query.answer(f"⚠️ No address configured for network: {network}", show_alert=True)
             return
         
-        new_address = amit_addr if owner == "amit" else suraj_addr
-        owner_name = "Amit" if owner == "amit" else "Suraj"
+        owner_name = owner.capitalize()
         
         # Get old address before updating (for monitoring transfer)
         old_address = escrow_roles[target_chat_id].get('escrow_address')
@@ -5908,11 +5906,15 @@ async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Check if network has configured addresses
-    amit_addr = escrow_addresses.get("amit", {}).get(network)
-    suraj_addr = escrow_addresses.get("suraj", {}).get(network)
-    
-    if not amit_addr or not suraj_addr:
+    # Only offer owners that currently have an address assigned in the bot for this
+    # network - these are the live values, including any set via /changeaddy
+    assigned = [
+        (owner, escrow_addresses.get(owner, {}).get(network))
+        for owner in escrow_addresses
+        if escrow_addresses.get(owner, {}).get(network)
+    ]
+
+    if not assigned:
         await update.message.reply_text(
             f"<b>No address configured for network: {network}</b>",
             parse_mode='HTML'
@@ -5923,16 +5925,21 @@ async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [
-            InlineKeyboardButton("Amit", callback_data=f"setaddy_{target_chat_id}_amit"),
-            InlineKeyboardButton("Suraj", callback_data=f"setaddy_{target_chat_id}_suraj"),
+            InlineKeyboardButton(owner.capitalize(), callback_data=f"setaddy_{target_chat_id}_{owner}")
+            for owner, _ in assigned
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+
+    assigned_list = "\n".join(
+        f"<b>{owner.capitalize()}:</b> <code>{address}</code>" for owner, address in assigned
+    )
     
     await update.message.reply_text(
         f"<b>Set escrow address for chat:</b> <code>{target_chat_id}</code>\n"
         f"<b>Token:</b> {token} | <b>Network:</b> {network}\n"
         f"<b>Current address:</b> <code>{current_address}</code>\n\n"
+        f"{assigned_list}\n\n"
         f"<b>Select the address owner:</b>",
         parse_mode='HTML',
         reply_markup=reply_markup
