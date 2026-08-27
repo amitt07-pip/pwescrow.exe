@@ -4,15 +4,19 @@ if sys.version_info >= (3, 13):
     sys.modules["imghdr"] = types.ModuleType("imghdr")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatMemberUpdated
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ChatMemberHandler, MessageHandler, ChatJoinRequestHandler, ExtBot, TypeHandler, filters
+from telegram.request import HTTPXRequest
+import contextvars
 from pyrogram import Client, enums
 from pyrogram.errors import FloodWait
-from pyrogram.types import ChatPrivileges
+from pyrogram.types import ChatPrivileges, ChatPermissions
 import os
 import hashlib
 import base64
 import asyncio
 import random
+import re
+import html
 from datetime import datetime, timedelta
 from PIL import Image, ImageDraw, ImageFont
 import io
@@ -28,8 +32,14 @@ API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 PHONE = os.getenv("TELEGRAM_PHONE", "")
 
 # Admin user IDs (comma-separated)
-ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098, 7422906767, 7962772947 ")
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "7472359048,7880967664,8453993167,2001575810,5825027777,6864194951,8093808661,5229586098,7422906767,7962772947,6643621069,5208040247")
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip()]
+
+# Admin IDs excluded from auto-promotion (CEO and OWNER stay regular members when
+# joining bot-made groups; they won't be auto-promoted to admin)
+DISPUTE_EXCLUDE_IDS = {6643621069, 6864194951}
+# Admins who will be auto-promoted when joining via dispute link
+DISPUTE_ADMIN_IDS = [i for i in ADMIN_IDS if i not in DISPUTE_EXCLUDE_IDS]
 
 # Blockchain API keys
 BSCSCAN_API_KEY = os.getenv("BSCSCAN_API_KEY", "")
@@ -61,6 +71,333 @@ monitored_addresses = {}  # {address: {'chat_id': ..., 'network': ..., 'last_che
 # Track fakedepo pending selections (temporary storage for admin command)
 fakedepo_pending = {}  # {admin_user_id: target_chat_id}
 
+# Track release and refund pending confirmations
+release_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': ..., 'seller_id': ..., 'buyer_confirmed': False, 'seller_confirmed': False, ...}}
+refund_pending = {}  # {message_id: {'chat_id': ..., 'amount': ..., 'buyer_id': ..., 'seller_id': ..., 'buyer_confirmed': False, 'seller_confirmed': False, ...}}
+
+# Global blacklist - users who are completely blocked from using the bot
+blacklisted_users = set()  # {user_id, ...}
+
+# Global fee setting (None means use default 0.5%/1% logic)
+global_fee_percent = None  # When set, this overrides the default fee for users with bio
+
+# Saved addresses per user {user_id: {'bsc': address, 'tron': address, 'btc': address, 'ltc': address}}
+saved_addresses = {}
+
+# Pending save operations {user_id: address} - temporary storage while user selects chain
+save_pending = {}
+
+# Track chats awaiting deal details after /dd command {chat_id: {'is_otc': bool}}
+awaiting_deal_details = {}
+
+# Track direct escrow requests: {chat_id: {'initiator_id': ..., 'counterparty_id': ..., 'initiator_username': ..., 'counterparty_username': ..., 'invite_message_id': ..., 'invite_chat_id': ..., 'joined': set()}}
+direct_escrow_pending = {}
+
+# Pending direct escrow type selection: {user_id: {'counterparty_username': ..., 'counterparty_id': ..., 'initiator_username': ..., 'initiator_id': ..., 'source_chat_id': ...}}
+direct_escrow_selection = {}
+
+# User deal stats: {user_id: float} - lifetime deal volume for display
+user_deal_stats = {}
+
+# Pending stats increase: {user_id: True} - tracks users awaiting amount input for /mystats increase
+awaiting_stats_increase = {}
+
+# Pending changeaddy: {user_id: {'owner': 'amit'|'suraj', 'token': str, 'network': str}} - awaiting new address input
+awaiting_changeaddy = {}
+
+# Pending manual address: {user_id: target_chat_id} - awaiting manual escrow address input via /manual
+awaiting_manual_address = {}
+
+# Full user stats keyed by user id: {user_id: {field: value, ...}} - shown by /stats, set by /clonestats
+user_stats = {}
+
+# Pending clonestats: {admin_id: target_user_id} - awaiting a formatted stats block via /clonestats
+awaiting_clonestats = {}
+
+# Default values for the /stats display
+DEFAULT_USER_STATS = {
+    'total_escrows': '0',
+    'total_tickets': '0',
+    'ranking': 'None',
+    'total_worth': '0.00$',
+    'fastest_escrow': '0',
+    'first_escrow_time': 'None',
+    'last_escrow_time': 'None',
+    'last_escrow_worth': '0.00$',
+}
+
+# (storage_key, label as it appears in the message) - used to render and parse stats
+STAT_FIELDS = [
+    ('total_escrows', 'Total Escrows'),
+    ('total_tickets', 'Total Tickets'),
+    ('ranking', 'Ranking'),
+    ('total_worth', 'Total Worth'),
+    ('fastest_escrow', 'Fastest Escrow'),
+    ('first_escrow_time', 'First Escrow Time'),
+    ('last_escrow_time', 'Last Escrow Time'),
+    ('last_escrow_worth', 'Last Escrow Worth'),
+]
+
+# Configurable escrow addresses: {owner: {network: address}}
+# Default addresses - can be changed via /changeaddy command
+escrow_addresses = {
+    "amit": {
+        "BSC": "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",
+        "TRON": "TDAyZ8PB1MnFXPywHDgrHwa3zkwwXB3WDR",
+        "BTC": "bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn",
+        "LTC": "ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz",
+    },
+    "suraj": {
+        "BSC": "0xf282e789e835ed379aea84ece204d2d643e6774f",
+        "TRON": "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB",
+        "BTC": "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48",
+        "LTC": "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66",
+    }
+}
+
+# CEO and OWNER IDs for restricted commands
+CEO_ID = 6643621069
+OWNER_ID = 6864194951
+
+# Blacklist file path (relative to script directory)
+BLACKLIST_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blacklist.json")
+GLOBAL_FEE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_fee.json")
+SAVED_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_addresses.json")
+USER_STATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_deal_stats.json")
+USER_STATS_FULL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_stats.json")
+ESCROW_ADDRESSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "escrow_addresses.json")
+
+def load_escrow_addresses():
+    """Load configurable escrow addresses from file on startup."""
+    global escrow_addresses
+    try:
+        if os.path.exists(ESCROW_ADDRESSES_FILE):
+            with open(ESCROW_ADDRESSES_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    escrow_addresses = data
+                    print(f"✅ Loaded escrow addresses from file")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load escrow addresses file: {e}")
+
+def save_escrow_addresses():
+    """Save configurable escrow addresses to file."""
+    try:
+        temp_file = ESCROW_ADDRESSES_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump(escrow_addresses, f, indent=2)
+        os.replace(temp_file, ESCROW_ADDRESSES_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save escrow addresses file: {e}")
+
+async def enable_member_invites(user_client, chat_id):
+    """Ensure regular members are allowed to add/invite other members.
+
+    Members should be able to add people directly instead of relying only on
+    the (2-use, expiring) invite link.
+    """
+    try:
+        chat = await user_client.get_chat(chat_id)
+        permissions = getattr(chat, 'permissions', None)
+        if permissions is not None:
+            # Reuse the group's existing permissions object and just flip the
+            # invite right, so we stay compatible across pyrogram versions.
+            permissions.can_invite_users = True
+        else:
+            permissions = ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+                can_send_polls=True,
+                can_invite_users=True,
+                can_pin_messages=True,
+                can_change_info=False,
+            )
+        await user_client.set_chat_permissions(chat_id, permissions)
+        print(f"✅ Enabled member add/invite permission for chat {chat_id}")
+    except Exception as e:
+        print(f"⚠️ Could not enable member invite permission for chat {chat_id}: {e}")
+
+def load_blacklist():
+    """Load blacklisted users from file on startup."""
+    global blacklisted_users
+    try:
+        if os.path.exists(BLACKLIST_FILE):
+            with open(BLACKLIST_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    blacklisted_users = set(data)
+                    print(f"✅ Loaded {len(blacklisted_users)} blacklisted users from file")
+                else:
+                    print("⚠️ Blacklist file has invalid format, starting with empty blacklist")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load blacklist file: {e}, starting with empty blacklist")
+
+def save_blacklist():
+    """Save blacklisted users to file."""
+    try:
+        # Write to temp file first, then rename for atomic write
+        temp_file = BLACKLIST_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump(list(blacklisted_users), f)
+        os.replace(temp_file, BLACKLIST_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save blacklist file: {e}")
+
+def load_global_fee():
+    """Load global fee setting from file on startup."""
+    global global_fee_percent
+    try:
+        if os.path.exists(GLOBAL_FEE_FILE):
+            with open(GLOBAL_FEE_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict) and 'fee_percent' in data:
+                    global_fee_percent = data['fee_percent']
+                    print(f"✅ Loaded global fee: {global_fee_percent * 100}%")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load global fee file: {e}")
+
+def load_saved_addresses():
+    """Load saved addresses from file on startup."""
+    global saved_addresses
+    try:
+        if os.path.exists(SAVED_ADDRESSES_FILE):
+            with open(SAVED_ADDRESSES_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    saved_addresses = {int(k): v for k, v in data.items()}
+                    print(f"✅ Loaded saved addresses for {len(saved_addresses)} users")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load saved addresses file: {e}")
+
+def save_saved_addresses():
+    """Save saved addresses to file."""
+    try:
+        temp_file = SAVED_ADDRESSES_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({str(k): v for k, v in saved_addresses.items()}, f)
+        os.replace(temp_file, SAVED_ADDRESSES_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save saved addresses file: {e}")
+
+def save_global_fee():
+    """Save global fee setting to file."""
+    try:
+        temp_file = GLOBAL_FEE_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({'fee_percent': global_fee_percent}, f)
+        os.replace(temp_file, GLOBAL_FEE_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save global fee file: {e}")
+
+def load_user_deal_stats():
+    """Load user deal stats from file on startup."""
+    global user_deal_stats
+    try:
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    user_deal_stats = {int(k): float(v) for k, v in data.items()}
+                    print(f"✅ Loaded deal stats for {len(user_deal_stats)} users")
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Failed to load user deal stats file: {e}")
+
+def save_user_deal_stats():
+    """Save user deal stats to file."""
+    try:
+        temp_file = USER_STATS_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({str(k): v for k, v in user_deal_stats.items()}, f)
+        os.replace(temp_file, USER_STATS_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save user deal stats file: {e}")
+
+def load_user_stats():
+    """Load full per-user stats (for /stats) from file on startup."""
+    global user_stats
+    try:
+        if os.path.exists(USER_STATS_FULL_FILE):
+            with open(USER_STATS_FULL_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    user_stats = {int(k): v for k, v in data.items()}
+                    print(f"✅ Loaded full stats for {len(user_stats)} users")
+    except (json.JSONDecodeError, IOError, ValueError) as e:
+        print(f"⚠️ Failed to load user stats file: {e}")
+
+def save_user_stats():
+    """Save full per-user stats to file."""
+    try:
+        temp_file = USER_STATS_FULL_FILE + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump({str(k): v for k, v in user_stats.items()}, f)
+        os.replace(temp_file, USER_STATS_FULL_FILE)
+    except IOError as e:
+        print(f"⚠️ Failed to save user stats file: {e}")
+
+def format_stats_message(user_id, username_display):
+    """Build the formatted /stats message for a user id."""
+    stats = {**DEFAULT_USER_STATS, **user_stats.get(user_id, {})}
+    return (
+        "<b><u>User Stats</u></b>\n\n"
+        f"👤 <b>Username:</b> {html.escape(username_display)} [{user_id}]\n"
+        f"📍 <b>Total Escrows:</b> {html.escape(str(stats['total_escrows']))}\n"
+        f"🎟 <b>Total Tickets:</b> {html.escape(str(stats['total_tickets']))}\n"
+        f"🎉 <b>Ranking:</b> {html.escape(str(stats['ranking']))}\n"
+        f"💰 <b>Total Worth:</b> {html.escape(str(stats['total_worth']))}\n"
+        f"⏰ <b>Fastest Escrow:</b> {html.escape(str(stats['fastest_escrow']))}\n"
+        f"⏰ <b>First Escrow Time:</b> {html.escape(str(stats['first_escrow_time']))}\n"
+        f"⏰ <b>Last Escrow Time:</b> {html.escape(str(stats['last_escrow_time']))}\n"
+        f"💰 <b>Last Escrow Worth:</b> {html.escape(str(stats['last_escrow_worth']))}"
+    )
+
+def parse_stats_block(text):
+    """Parse a pasted stats block into {field: value}. Ignores missing fields."""
+    result = {}
+    for key, label in STAT_FIELDS:
+        for line in text.split('\n'):
+            clean = re.sub(r'<[^>]+>', '', line)
+            marker = label + ':'
+            idx = clean.find(marker)
+            if idx != -1:
+                value = clean[idx + len(marker):].strip()
+                if value:
+                    result[key] = value
+                break
+    return result
+
+def get_escrow_fee_percent(both_have_bio: bool) -> float:
+    """Get the escrow fee percent based on global setting and bio status."""
+    if both_have_bio and global_fee_percent is not None:
+        return global_fee_percent
+    elif both_have_bio:
+        return 0.005  # Default 0.5% for users with bio
+    else:
+        return 0.01  # Default 1% for users without bio
+
+async def check_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE = None) -> bool:
+    """Check if any user in the chat is blacklisted. Returns True if blacklisted user found.
+    Works with both messages and callback queries."""
+    user = update.effective_user
+    if user and user.id in blacklisted_users:
+        message_text = (
+            f"<b>You are blacklisted from using this bot.</b>\n\n"
+            f"<b>User ID:</b> <code>{user.id}</code>"
+        )
+        # Handle both message and callback query contexts
+        if update.callback_query:
+            await update.callback_query.answer("You are blacklisted from using this bot.", show_alert=True)
+            try:
+                await update.callback_query.edit_message_text(message_text, parse_mode='HTML')
+            except:
+                pass
+        elif update.effective_message:
+            await update.effective_message.reply_text(message_text, parse_mode='HTML')
+        return True
+    return False
+
 def generate_referral_code(user_id):
     """Generate a unique referral code for a user based on their ID"""
     hash_object = hashlib.sha256(str(user_id).encode())
@@ -69,56 +406,275 @@ def generate_referral_code(user_id):
     referral_code = b64_encoded.replace('/', '').replace('+', '').replace('=', '')[:15].upper()
     return f"ref_{referral_code}"
 
-async def send_group_creation_log(context, chat_id, buyer_username, seller_username, group_type="P2P"):
-    """Send group creation log to logs channel"""
-    if not LOGS_CHANNEL_ID:
-        print(f"⚠️  LOGS_CHANNEL_ID not set - skipping group creation log for chat {chat_id}")
-        return
-    
-    try:
-        log_message = f"""📊 <b>NEW ESCROW GROUP CREATED</b>
+# Status stages for escrow deals (used to prevent status regression)
+ESCROW_STATUS_STAGES = {
+    "Group Created": 0,
+    "Form Sent..": 1,
+    "Buyer Address Set Waiting For Seller Address To Be Set": 2,
+    "Seller Address Set Waiting For Buyer Address To Be Set": 2,
+    "Both Parties Address Set": 3,
+    "Token Selected": 4,
+    "Deposit Address Sent": 5,
+    "Deposit Detected": 6,
+    "Release/Refund Stage": 7,
+    "Release Stage": 7,
+    "Refund Stage": 7,
+    "Deal Completed": 8,
+    "Deal Closed": 9
+}
 
-🆔 <b>Chat ID:</b> <code>{chat_id}</code>
+ROLE_LOG_LABELS = {'buyer': 'Buyer', 'seller': 'Seller'}
+
+
+def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username="Not set", 
+                              deal_amount="Not set", group_type="P2P", current_status="Group Created",
+                              initiator_username="Not set", role_order=None):
+    """Build the escrow log message with current data.
+
+    Role lines are only shown once that role is set, in the order the roles were
+    set. The status line only shows once both roles are set.
+    """
+    usernames = {'buyer': buyer_username, 'seller': seller_username}
+    if not role_order:
+        role_order = [
+            role for role in ('buyer', 'seller')
+            if usernames.get(role) and usernames[role] != 'Not set'
+        ]
+
+    lines = ["<b><u>PAGAL ESCROW BOT</u></b>", ""]
+    for role in role_order:
+        lines.append(f"👤 <b>{ROLE_LOG_LABELS[role]}:</b> {usernames.get(role, 'Not set')}")
+    lines.append(f"🔖 <b>Group TYPE:</b> {group_type}")
+
+    if len(role_order) >= 2:
+        lines.append(f"<b>Status:</b> {current_status}")
+
+    lines.extend([
+        "",
+        "<blockquote><i>Deal Information will be updated as soon as its fulfilled</i></blockquote>"
+    ])
+    return "\n".join(lines)
+
+
+def build_escrow_log_markup(chat_id):
+    """DEAL INFO button - only shown once the /dd form has been filled by a user."""
+    deal_details = escrow_roles.get(chat_id, {}).get('log_data', {}).get('deal_details')
+    if not deal_details:
+        return None
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("DEAL INFO", callback_data=f"dealinfo_{chat_id}")
+    ]])
+
+async def get_deal_group_link(context, chat_id):
+    """Return the deal group's invite link, creating one with the bot if needed."""
+    stored_link = escrow_roles.get(chat_id, {}).get('invite_link')
+    if stored_link:
+        return stored_link
+
+    try:
+        link = await context.bot.export_chat_invite_link(chat_id)
+        if chat_id not in escrow_roles:
+            escrow_roles[chat_id] = {}
+        escrow_roles[chat_id]['invite_link'] = link
+        return link
+    except Exception as e:
+        print(f"⚠️  Could not get invite link for chat {chat_id}: {e}")
+        return None
+
+
+async def send_deal_result_log(context, chat_id, buyer_username, seller_username,
+                               amount_after_fees, refunded=False):
+    """Send the completed/refunded deal message to the logs channel."""
+    if not LOGS_CHANNEL_ID:
+        return
+
+    try:
+        chat_info = await context.bot.get_chat(chat_id)
+        group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
+        group_link = await get_deal_group_link(context, chat_id)
+        group_value = f'<a href="{group_link}">Link</a>' if group_link else "Link"
+        title = "DEAL SUCCESSFULLY REFUNDED" if refunded else "DEAL SUCCESSFULLY COMPLETED"
+
+        logs_msg = f"""✅ <b>{title}</b> ✅
+
 👤 <b>Buyer:</b> {buyer_username}
 👤 <b>Seller:</b> {seller_username}
-🔖 <b>Type:</b> {group_type}
-📅 <b>Time:</b> {datetime.now().strftime("%d/%m/%Y %H:%M:%S")}"""
+📋 <b>Group Type:</b> {group_type}
+💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
+🔗 <b>Group:</b> {group_value}"""
+        await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
+    except Exception as e:
+        print(f"Error sending logs message: {e}")
+
+
+async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=None, seller_username=None, deal_amount=None, initiator_username=None):
+    """Send initial escrow log to logs channel and store message ID"""
+    if not LOGS_CHANNEL_ID:
+        print(f"⚠️  LOGS_CHANNEL_ID not set - skipping escrow log for chat {chat_id}")
+        return None
+    
+    try:
+        # Initialize log data in escrow_roles
+        if chat_id not in escrow_roles:
+            escrow_roles[chat_id] = {}
         
-        print(f"📤 Attempting to send group creation log to channel {LOGS_CHANNEL_ID}...")
-        await context.bot.send_message(
+        # Don't overwrite existing log_data if it exists (avoid re-initializing)
+        if 'log_data' not in escrow_roles[chat_id]:
+            escrow_roles[chat_id]['log_data'] = {
+                'buyer_username': buyer_username or 'Not set',
+                'seller_username': seller_username or 'Not set',
+                'deal_amount': deal_amount or 'Not set',
+                'group_type': group_type,
+                'current_status': 'Group Created',
+                'status_stage': 0,
+                'initiator_username': initiator_username or 'Not set',
+                'role_order': [],
+                'deal_details': None
+            }
+            for role, value in (('buyer', buyer_username), ('seller', seller_username)):
+                if value:
+                    escrow_roles[chat_id]['log_data']['role_order'].append(role)
+        else:
+            # Update with provided values if they exist
+            if buyer_username:
+                escrow_roles[chat_id]['log_data']['buyer_username'] = buyer_username
+            if seller_username:
+                escrow_roles[chat_id]['log_data']['seller_username'] = seller_username
+            if deal_amount:
+                escrow_roles[chat_id]['log_data']['deal_amount'] = deal_amount
+            if initiator_username:
+                escrow_roles[chat_id]['log_data']['initiator_username'] = initiator_username
+        
+        log_data = escrow_roles[chat_id]['log_data']
+        log_message = build_escrow_log_message(
+            chat_id=chat_id,
+            buyer_username=log_data.get('buyer_username', 'Not set'),
+            seller_username=log_data.get('seller_username', 'Not set'),
+            group_type=group_type,
+            current_status="Group Created",
+            initiator_username=log_data.get('initiator_username', 'Not set'),
+            role_order=log_data.get('role_order')
+        )
+        
+        print(f"📤 Sending escrow log to channel {LOGS_CHANNEL_ID}...")
+        sent_msg = await context.bot.send_message(
             chat_id=LOGS_CHANNEL_ID,
             text=log_message,
-            parse_mode='HTML'
+            parse_mode='HTML',
+            reply_markup=build_escrow_log_markup(chat_id)
         )
-        print(f"✅ Sent group creation log to channel {LOGS_CHANNEL_ID} for chat {chat_id}")
+        
+        # Store the message ID for later updates
+        escrow_roles[chat_id]['log_message_id'] = sent_msg.message_id
+        print(f"✅ Sent escrow log to channel {LOGS_CHANNEL_ID} for chat {chat_id}, message_id={sent_msg.message_id}")
+        return sent_msg.message_id
     except Exception as e:
-        print(f"❌ Failed to send log to channel {LOGS_CHANNEL_ID}: {type(e).__name__}: {e}")
+        print(f"❌ Failed to send escrow log to channel {LOGS_CHANNEL_ID}: {type(e).__name__}: {e}")
         print(f"   Make sure the bot is added to the logs channel and is an admin!")
+        return None
+
+async def update_escrow_log(context, chat_id, new_status=None, buyer_username=None, 
+                            seller_username=None, deal_amount=None, extra_info=""):
+    """Update the escrow log message with new status/data"""
+    if not LOGS_CHANNEL_ID:
+        return
+    
+    if chat_id not in escrow_roles:
+        print(f"⚠️  No escrow_roles for chat {chat_id}, cannot update log")
+        return
+    
+    log_message_id = escrow_roles[chat_id].get('log_message_id')
+    if not log_message_id:
+        print(f"⚠️  No log_message_id for chat {chat_id}, cannot update log")
+        return
+    
+    log_data = escrow_roles[chat_id].get('log_data', {})
+    
+    # Update fields if provided, remembering the order the roles were set in
+    role_order = log_data.setdefault('role_order', [])
+    if buyer_username is not None:
+        log_data['buyer_username'] = buyer_username
+        if 'buyer' not in role_order:
+            role_order.append('buyer')
+    if seller_username is not None:
+        log_data['seller_username'] = seller_username
+        if 'seller' not in role_order:
+            role_order.append('seller')
+    if deal_amount is not None:
+        log_data['deal_amount'] = deal_amount
+    
+    # Update status if provided and it's a progression (not regression)
+    if new_status is not None:
+        new_stage = ESCROW_STATUS_STAGES.get(new_status.split(" [")[0], 0)  # Handle statuses with extra info
+        current_stage = log_data.get('status_stage', 0)
+        
+        if new_stage >= current_stage:
+            # Add extra info to status if provided
+            if extra_info:
+                log_data['current_status'] = f"{new_status} [{extra_info}]"
+            else:
+                log_data['current_status'] = new_status
+            log_data['status_stage'] = new_stage
+        else:
+            print(f"⚠️  Skipping status regression: {log_data.get('current_status')} -> {new_status}")
+            return
+    
+    # Save updated log data
+    escrow_roles[chat_id]['log_data'] = log_data
+    
+    # Build and send updated message
+    log_message = build_escrow_log_message(
+        chat_id=chat_id,
+        buyer_username=log_data.get('buyer_username', 'Not set'),
+        seller_username=log_data.get('seller_username', 'Not set'),
+        deal_amount=log_data.get('deal_amount', 'Not set'),
+        group_type=log_data.get('group_type', 'P2P'),
+        current_status=log_data.get('current_status', 'Group Created'),
+        initiator_username=log_data.get('initiator_username', 'Not set'),
+        role_order=log_data.get('role_order')
+    )
+    
+    try:
+        await context.bot.edit_message_text(
+            chat_id=LOGS_CHANNEL_ID,
+            message_id=log_message_id,
+            text=log_message,
+            parse_mode='HTML',
+            reply_markup=build_escrow_log_markup(chat_id)
+        )
+        print(f"✅ Updated escrow log for chat {chat_id}: {log_data.get('current_status')}")
+    except Exception as e:
+        print(f"❌ Failed to update escrow log for chat {chat_id}: {type(e).__name__}: {e}")
+
+async def send_group_creation_log(context, chat_id, buyer_username, seller_username, group_type="P2P"):
+    """Legacy function - now calls send_escrow_log for backward compatibility"""
+    await send_escrow_log(context, chat_id, group_type, buyer_username=buyer_username, seller_username=seller_username)
 
 def generate_group_photo(buyer_username, seller_username):
     """Generate group photo with buyer and seller usernames"""
     try:
         # Open the template image
-        img = Image.open("attached_assets/Untitled_1762800642304.jpeg")
+        img = Image.open("Untitled_1762800642304.jpeg")
         draw = ImageDraw.Draw(img)
         
         # Strip whitespace and @ symbol from usernames
         buyer_username = buyer_username.strip().lstrip('@')
         seller_username = seller_username.strip().lstrip('@')
         
-        # Try to use fonts that match the template style (bold geometric sans)
+        # Try to use fonts that match the template style (clean sans-serif like in reference image)
         try:
             font = None
             font_paths = [
-                "/nix/store/59p03gp3vzbrhd7xjiw3npgbdd68x3y0-dejavu-fonts-2.37/share/fonts/truetype/DejaVuSansCondensed-Bold.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
+                "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/nix/store/59p03gp3vzbrhd7xjiw3npgbdd68x3y0-dejavu-fonts-2.37/share/fonts/truetype/DejaVuSans-Bold.ttf",
             ]
             
             for font_path in font_paths:
                 try:
-                    # Font size for 800×790 template
-                    font = ImageFont.truetype(font_path, 48)
+                    # Font size for 800×790 template - slightly larger for better visibility
+                    font = ImageFont.truetype(font_path, 52)
                     break
                 except:
                     continue
@@ -156,22 +712,22 @@ def generate_group_photo(buyer_username, seller_username):
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
-    welcome_message = """💫 @PagaLEscrowBot 💫
+    welcome_message = """💫 *@PagaLEscrowBot* 💫
 Your Trustworthy Telegram Escrow Service
 
-Welcome to @PagaLEscrowBot. This bot provides a reliable escrow service for your transactions on Telegram.
-Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type /dispute and an arbitrator will join the group chat within 24 hours.
+Welcome to *@PagaLEscrowBot*. This bot provides a reliable escrow service for your transactions on Telegram.
+Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type `/dispute` and an arbitrator will join the group chat within 24 hours.
 
-🎟 ESCROW FEE:
+🎟 *ESCROW FEE:*
 1.0% for P2P and 1.0% for OTC Flat
 
-🌐 [UPDATES](https://t.me/BSR_ShoppiE) - [VOUCHES](https://t.me/PagaL_Escrow_Vouches) ☑️
+🌐 [(UPDATES)](https://t.me/BSR_ShoppiE) - [(VOUCHES)](https://t.me/PagaL_Escrow_Vouches) ☑️
 
-💬 Proceed with /escrow (to start with a new escrow)
+💬 *Proceed with* /escrow *(to start with a new escrow)*
 
-⚠️ IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.
+⚠️ *IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.*
 
-💡 Type /menu to summon a menu with all bots features"""
+💡 *Type* `/menu` *to summon a menu with all bots features*"""
     
     keyboard = [
         [InlineKeyboardButton("COMMANDS LIST 🤖", callback_data="commands_list")],
@@ -188,11 +744,107 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
     await update.message.reply_text(welcome_message, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=reply_markup)
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /menu command - placeholder for now"""
-    await update.message.reply_text("📋 Menu functionality coming soon...")
+    """Handle /menu command - same as start command"""
+    welcome_message = """💫 *@PagaLEscrowBot* 💫
+Your Trustworthy Telegram Escrow Service
+
+Welcome to *@PagaLEscrowBot*. This bot provides a reliable escrow service for your transactions on Telegram.
+Avoid scams, your funds are safeguarded throughout your deals. If you run into any issues, simply type `/dispute` and an arbitrator will join the group chat within 24 hours.
+
+🎟 *ESCROW FEE:*
+1.0% for P2P and 1.0% for OTC Flat
+
+🌐 [(UPDATES)](https://t.me/BSR_ShoppiE) - [(VOUCHES)](https://t.me/PagaL_Escrow_Vouches) ☑️
+
+💬 *Proceed with* /escrow *(to start with a new escrow)*
+
+⚠️ *IMPORTANT - Make sure coin is same of Buyer and Seller else you may loose your coin.*
+
+💡 *Type* `/menu` *to summon a menu with all bots features*"""
+    
+    keyboard = [
+        [InlineKeyboardButton("COMMANDS LIST 🤖", callback_data="commands_list")],
+        [InlineKeyboardButton("☎️ CONTACT", callback_data="contact")],
+        [InlineKeyboardButton("Updates 🔃", url="http://t.me/Escrow_PagaL"), 
+         InlineKeyboardButton("Vouches ✔️", url="http://t.me/PagaL_Escrow_Vouches")],
+        [InlineKeyboardButton("WHAT IS ESCROW ❔", callback_data="what_is_escrow"),
+         InlineKeyboardButton("Instructions 🧑‍🏫", callback_data="instructions")],
+        [InlineKeyboardButton("Terms 📝", callback_data="terms")],
+        [InlineKeyboardButton("Invites 👤", callback_data="invites")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(welcome_message, parse_mode='Markdown', disable_web_page_preview=True, reply_markup=reply_markup)
 
 async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /escrow command - show escrow type selection"""
+    """Handle /escrow command - show escrow type selection, or direct escrow with /escrow @username"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
+    # Check if a counterparty username/user_id was provided
+    if context.args and len(context.args) >= 1:
+        initiator = update.effective_user
+        initiator_username = f"@{initiator.username}" if initiator.username else initiator.first_name
+        counterparty_arg = context.args[0].strip()
+        
+        # Resolve counterparty: could be @username or user_id
+        counterparty_username = None
+        counterparty_id = None
+        
+        if counterparty_arg.startswith("@"):
+            counterparty_username = counterparty_arg
+        else:
+            try:
+                counterparty_id = int(counterparty_arg)
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>Invalid format. Use:</b> /escrow @username <b>or</b> /escrow [user_id]",
+                    parse_mode='HTML'
+                )
+                return
+        
+        # Try to resolve user info if we have an ID but no username
+        if counterparty_id and not counterparty_username:
+            try:
+                cp_chat = await context.bot.get_chat(counterparty_id)
+                counterparty_username = f"@{cp_chat.username}" if cp_chat.username else cp_chat.first_name
+            except Exception:
+                counterparty_username = str(counterparty_id)
+        
+        # Try to resolve counterparty ID from username
+        if counterparty_username and not counterparty_id:
+            try:
+                username_clean = counterparty_username.lstrip("@")
+                if user_client:
+                    if not user_client.is_connected:
+                        await user_client.start()
+                    cp_user = await user_client.get_users(username_clean)
+                    counterparty_id = cp_user.id
+            except Exception as e:
+                print(f"Could not resolve counterparty ID from username {counterparty_username}: {e}")
+        
+        # Store pending selection
+        direct_escrow_selection[initiator.id] = {
+            'counterparty_username': counterparty_username,
+            'counterparty_id': counterparty_id,
+            'initiator_username': initiator_username,
+            'initiator_id': initiator.id,
+            'source_chat_id': update.effective_chat.id
+        }
+        
+        keyboard = [
+            [InlineKeyboardButton("P2P", callback_data="escrow_direct_p2p"),
+             InlineKeyboardButton("Product Deal", callback_data="escrow_direct_product")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            "Please select your escrow type from below.",
+            reply_markup=reply_markup
+        )
+        return
+    
     keyboard = [
         [InlineKeyboardButton("P2P", callback_data="escrow_p2p"),
          InlineKeyboardButton("Product Deal", callback_data="escrow_product")]
@@ -203,6 +855,11 @@ async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /dispute command - notify admins"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
+    global user_client
     chat = update.effective_chat
     
     # Only work in groups/supergroups
@@ -219,11 +876,23 @@ async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='HTML'
     )
     
-    # Create an invite link for the group
+    # Create an invite link for the group using userbot
     try:
-        # Create invite link with no member limit (admins can join)
-        chat_invite = await context.bot.create_chat_invite_link(chat_id=chat.id)
-        invite_link = chat_invite.invite_link
+        # Ensure userbot is connected
+        if not user_client:
+            user_client = Client(
+                "escrow_user_session",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                phone_number=PHONE
+            )
+        
+        if not user_client.is_connected:
+            await user_client.start()
+        
+        # Create invite link using userbot (so it can track joins better)
+        invite_link_obj = await user_client.create_chat_invite_link(chat.id)
+        invite_link = invite_link_obj.invite_link
         
         # Get group title
         group_title = chat.title or "Escrow Group"
@@ -256,10 +925,22 @@ async def dispute_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def dd_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /dd command - deal details form"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     chat = update.effective_chat
     chat_id = chat.id
     
-    # Check if this is a group
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Please use this command in a group.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Rename the group with a random 8-digit number
     if chat.type in ['group', 'supergroup']:
         try:
             # Generate random 8-digit number starting with 9
@@ -306,12 +987,44 @@ Conditions (if any) -</code>
 
 Remember without it disputes wouldn't be resolved. Once filled proceed with Specifications of the seller or buyer with /seller or /buyer <b>[CRYPTO ADDRESS]</b>"""
     
-    await update.message.reply_text(dd_message, parse_mode='HTML')
+    keyboard = [[InlineKeyboardButton("How To Use Bot ❔", url="https://t.me/how_to_use_pagalescrowbot")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(dd_message, parse_mode='HTML', reply_markup=reply_markup)
+    
+    # Set flag to capture deal details from next message
+    awaiting_deal_details[chat_id] = {'is_otc': is_otc_group}
+    
+    # Send initial escrow log to logs channel (if not already sent)
+    if chat_id not in escrow_roles or 'log_message_id' not in escrow_roles.get(chat_id, {}):
+        # Determine group type based on chat title
+        group_type = "OTC" if is_otc_group else "P2P"
+        # Get initiator username from escrow_roles (stored when group was created)
+        initiator_username = escrow_roles.get(chat_id, {}).get('initiator_username', 'Not set')
+        await send_escrow_log(context, chat_id, group_type, initiator_username=initiator_username)
+    
+    # Update escrow log status to "Form Sent.."
+    await update_escrow_log(context, chat_id, new_status="Form Sent..")
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle button callbacks"""
+    """Handle button callbacks.
+
+    The callback query is answered only after the work is done, so Telegram keeps
+    showing its "Loading" state on the button while the bot prepares the response.
+    """
     query = update.callback_query
-    await query.answer()
+    try:
+        await _handle_button_callback(update, context)
+    finally:
+        try:
+            await query.answer()
+        except Exception:
+            pass  # Already answered by a branch, or the query expired
+
+
+async def _handle_button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button callbacks"""
+    global user_client, escrow_roles, monitored_addresses
+    query = update.callback_query
     
     if query.data == "commands_list":
         commands_message = """📌 AVAILABLE COMMANDS
@@ -364,7 +1077,8 @@ Here you have a full command list, incase you do like to move through the bot us
         await query.edit_message_text(contact_message, reply_markup=reply_markup)
     
     elif query.data == "what_is_escrow":
-        await query.answer("**Coming Soon...**", show_alert=True)
+        await query.answer()
+        await query.message.reply_text("<b>Coming Soon...</b>", parse_mode='HTML')
     
     elif query.data == "instructions":
         instructions_message = """📘 GUIDE " HOW TO USE @PagaLEscrowBot ( Escrow Bot ) " FOR SAFE AND FASTEST HASSLE-FREE ESCROW 🚀  
@@ -460,8 +1174,12 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         await query.edit_message_text(invites_message, reply_markup=reply_markup)
     
     elif query.data == "escrow_p2p":
+        # Check if user is blacklisted
+        if await check_blacklist(update, context):
+            return
+        
         await query.answer()
-        await query.edit_message_text("**Creating a safe trading place for you please wait, please wait...**", parse_mode='Markdown')
+        await query.edit_message_text("<b>Creating a safe trading place for you please wait, please wait...</b>", parse_mode='HTML')
         
         if not user_client:
             error_msg = "❌ Group creation is not configured. Please contact the bot administrator."
@@ -486,23 +1204,25 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 description=""
             )
             
-            # Small delay to ensure group is fully created
-            await asyncio.sleep(2)
-            
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
             await user_client.add_chat_members(supergroup.id, bot_username)
             
             # Store the group number as the transaction ID for this chat
             # Convert supergroup.id to the actual chat_id format used by bot
-            # Pyrogram returns negative IDs, so we use abs() to get the positive part
-            bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            # Pyrogram may return IDs in different formats, so handle both cases
+            supergroup_id_str = str(supergroup.id)
+            if supergroup_id_str.startswith("-100"):
+                bot_chat_id = supergroup.id
+            else:
+                bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            print(f"DEBUG P2P: supergroup.id={supergroup.id}, bot_chat_id={bot_chat_id}")
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
-            
-            # Small delay before promoting
-            await asyncio.sleep(1)
+            # Store initiator username for logs
+            initiator_username = f"@{user.username}" if user.username else user.first_name
+            escrow_roles[bot_chat_id]['initiator_username'] = initiator_username
             
             # Promote bot to admin with full permissions
             await user_client.promote_chat_member(
@@ -521,32 +1241,43 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin temporarily to send message on behalf of group
+            # Promote userbot to anonymous admin with full permissions
             me = await user_client.get_me()
-            await user_client.promote_chat_member(
-                chat_id=supergroup.id,
-                user_id=me.id,
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_pin_messages=True,
-                    is_anonymous=True
+            print(f"🔍 P2P: Promoting userbot {me.id} to anonymous admin in chat {supergroup.id}...")
+            try:
+                await user_client.promote_chat_member(
+                    chat_id=supergroup.id,
+                    user_id=me.id,
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_pin_messages=True,
+                        can_invite_users=True,
+                        can_promote_members=True,
+                        can_restrict_members=True,
+                        can_change_info=True,
+                        is_anonymous=True
+                    )
                 )
-            )
+                print(f"✅ P2P: Userbot {me.id} promoted to anonymous admin")
+                
+                # Verify the promotion worked
+                try:
+                    member_info = await user_client.get_chat_member(supergroup.id, me.id)
+                    print(f"🔍 P2P: Userbot status after promotion: {member_info.status}, privileges: {member_info.privileges}")
+                except Exception as ve:
+                    print(f"⚠️  P2P: Could not verify userbot status: {ve}")
+            except Exception as e:
+                print(f"❌ P2P: Failed to promote userbot to anonymous admin: {e}")
             
-            # Small delay for promotion to take effect
-            await asyncio.sleep(1)
-            
-            # Wait for bot admin permissions to propagate
-            await asyncio.sleep(2)
-            
-            # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await user_client.create_chat_invite_link(
-                chat_id=supergroup.id,
-                member_limit=2
-            )
+            # Create invite link with 2 member limit
+            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
-            print(f"✅ P2P Invite link created successfully: {invite_link}")
+            escrow_roles[bot_chat_id]['invite_link'] = invite_link
+            print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
+
+            # Allow regular members to add other members directly
+            await enable_member_invites(user_client, supergroup.id)
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -565,20 +1296,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 disable_notification=True
             )
             
-            # Delete service messages (join/leave notifications) BEFORE leaving
+            # Delete service messages (join/leave notifications)
             try:
-                # Get recent messages to find and delete service messages while still in group
+                # Get recent messages to find and delete service messages
                 async for message in user_client.get_chat_history(supergroup.id, limit=10):
                     if message.service:
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # Small delay before leaving
-            await asyncio.sleep(1)
-            
-            # User account leaves the group (and won't rejoin)
-            await user_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
@@ -588,7 +1313,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Use HTML formatting
             success_message = f"""<b><u>Escrow Group Created</u></b>
 
-<b>Creator: {user_full_name}</b>
+<b>Creator: {html.escape(user_full_name)}</b>
 
 <b>Join this escrow group and share the link with the buyer and seller.</b>
 
@@ -605,8 +1330,12 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             await query.edit_message_text(error_message)
     
     elif query.data == "escrow_product":
+        # Check if user is blacklisted
+        if await check_blacklist(update, context):
+            return
+        
         await query.answer()
-        await query.edit_message_text("**Creating a safe trading place for you please wait, please wait...**", parse_mode='Markdown')
+        await query.edit_message_text("<b>Creating a safe trading place for you please wait, please wait...</b>", parse_mode='HTML')
         
         if not user_client:
             error_msg = "❌ Group creation is not configured. Please contact the bot administrator."
@@ -631,23 +1360,25 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 description=""
             )
             
-            # Small delay to ensure group is fully created
-            await asyncio.sleep(2)
-            
             # Add the bot to the group
             bot_username = (await context.bot.get_me()).username
             await user_client.add_chat_members(supergroup.id, bot_username)
             
             # Store the group number as the transaction ID for this chat
             # Convert supergroup.id to the actual chat_id format used by bot
-            # Pyrogram returns negative IDs, so we use abs() to get the positive part
-            bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            # Pyrogram may return IDs in different formats, so handle both cases
+            supergroup_id_str = str(supergroup.id)
+            if supergroup_id_str.startswith("-100"):
+                bot_chat_id = supergroup.id
+            else:
+                bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            print(f"DEBUG OTC: supergroup.id={supergroup.id}, bot_chat_id={bot_chat_id}")
             if bot_chat_id not in escrow_roles:
                 escrow_roles[bot_chat_id] = {}
             escrow_roles[bot_chat_id]['transaction_id'] = random_number
-            
-            # Small delay before promoting
-            await asyncio.sleep(1)
+            # Store initiator username for logs
+            initiator_username = f"@{user.username}" if user.username else user.first_name
+            escrow_roles[bot_chat_id]['initiator_username'] = initiator_username
             
             # Promote bot to admin with full permissions
             await user_client.promote_chat_member(
@@ -666,32 +1397,43 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 )
             )
             
-            # Promote user to anonymous admin temporarily to send message on behalf of group
+            # Promote userbot to anonymous admin with full permissions
             me = await user_client.get_me()
-            await user_client.promote_chat_member(
-                chat_id=supergroup.id,
-                user_id=me.id,
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_pin_messages=True,
-                    is_anonymous=True
+            print(f"🔍 OTC: Promoting userbot {me.id} to anonymous admin in chat {supergroup.id}...")
+            try:
+                await user_client.promote_chat_member(
+                    chat_id=supergroup.id,
+                    user_id=me.id,
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_pin_messages=True,
+                        can_invite_users=True,
+                        can_promote_members=True,
+                        can_restrict_members=True,
+                        can_change_info=True,
+                        is_anonymous=True
+                    )
                 )
-            )
+                print(f"✅ OTC: Userbot {me.id} promoted to anonymous admin")
+                
+                # Verify the promotion worked
+                try:
+                    member_info = await user_client.get_chat_member(supergroup.id, me.id)
+                    print(f"🔍 OTC: Userbot status after promotion: {member_info.status}, privileges: {member_info.privileges}")
+                except Exception as ve:
+                    print(f"⚠️  OTC: Could not verify userbot status: {ve}")
+            except Exception as e:
+                print(f"❌ OTC: Failed to promote userbot to anonymous admin: {e}")
             
-            # Small delay for promotion to take effect
-            await asyncio.sleep(1)
-            
-            # Wait for bot admin permissions to propagate
-            await asyncio.sleep(2)
-            
-            # Create invite link using Pyrogram (user client has immediate access)
-            invite_link_obj = await user_client.create_chat_invite_link(
-                chat_id=supergroup.id,
-                member_limit=2
-            )
+            # Create invite link with 2 member limit
+            invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
-            print(f"✅ Product Invite link created successfully: {invite_link}")
+            escrow_roles[bot_chat_id]['invite_link'] = invite_link
+            print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
+
+            # Allow regular members to add other members directly
+            await enable_member_invites(user_client, supergroup.id)
             
             # Send anonymous welcome message (appears from the group name)
             welcome_text = """📍 Hey there traders! Welcome to our escrow service.
@@ -710,20 +1452,14 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 disable_notification=True
             )
             
-            # Delete service messages (join/leave notifications) BEFORE leaving
+            # Delete service messages (join/leave notifications)
             try:
-                # Get recent messages to find and delete service messages while still in group
+                # Get recent messages to find and delete service messages
                 async for message in user_client.get_chat_history(supergroup.id, limit=10):
                     if message.service:
                         await user_client.delete_messages(supergroup.id, message.id)
             except Exception as e:
                 print(f"Could not delete service messages: {e}")
-            
-            # Small delay before leaving
-            await asyncio.sleep(1)
-            
-            # User account leaves the group (and won't rejoin)
-            await user_client.leave_chat(supergroup.id)
             
             # Get user's full name
             user_full_name = user.first_name
@@ -733,7 +1469,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Use HTML formatting
             success_message = f"""<b><u>Escrow Group Created</u></b>
 
-<b>Creator: {user_full_name}</b>
+<b>Creator: {html.escape(user_full_name)}</b>
 
 <b>Join this escrow group and share the link with the buyer and seller.</b>
 
@@ -742,6 +1478,176 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
 <blockquote>⚠️ Note: This link is for 2 members only—third parties are not allowed to join.</blockquote>"""
             
             await query.edit_message_text(success_message, parse_mode='HTML')
+            
+        except FloodWait as e:
+            await query.edit_message_text(f"⏳ Rate limit hit. Please wait {e.value} seconds and try again.")
+        except Exception as e:
+            error_message = f"❌ Failed to create escrow group.\n\nPlease try again or contact support.\n\nError: {str(e)}"
+            await query.edit_message_text(error_message)
+    
+    elif query.data in ("escrow_direct_p2p", "escrow_direct_product"):
+        # Handle direct escrow group creation with counterparty
+        if await check_blacklist(update, context):
+            return
+        
+        await query.answer()
+        
+        user = query.from_user
+        pending = direct_escrow_selection.get(user.id)
+        if not pending:
+            await query.edit_message_text("<b>Session expired. Please use /escrow @username again.</b>", parse_mode='HTML')
+            return
+        
+        is_p2p = query.data == "escrow_direct_p2p"
+        escrow_type = "P2P" if is_p2p else "OTC"
+        group_name = f"{escrow_type} Escrow By PAGAL Bot"
+        
+        await query.edit_message_text(f"<b>Creating a safe {escrow_type} trading place for you, please wait...</b>", parse_mode='HTML')
+        
+        if not user_client:
+            await query.edit_message_text("❌ Group creation is not configured. Please contact the bot administrator.")
+            return
+        
+        try:
+            if not user_client.is_connected:
+                await user_client.start()
+            
+            random_number = random.randint(90000000, 99999999)
+            
+            # Create supergroup
+            supergroup = await user_client.create_supergroup(
+                title=group_name,
+                description=""
+            )
+            
+            # Add the bot to the group
+            bot_username = (await context.bot.get_me()).username
+            await user_client.add_chat_members(supergroup.id, bot_username)
+            
+            # Convert supergroup ID
+            supergroup_id_str = str(supergroup.id)
+            if supergroup_id_str.startswith("-100"):
+                bot_chat_id = supergroup.id
+            else:
+                bot_chat_id = int(f"-100{abs(supergroup.id)}")
+            
+            if bot_chat_id not in escrow_roles:
+                escrow_roles[bot_chat_id] = {}
+            escrow_roles[bot_chat_id]['transaction_id'] = random_number
+            escrow_roles[bot_chat_id]['initiator_username'] = pending['initiator_username']
+            
+            # Promote bot to admin
+            await user_client.promote_chat_member(
+                chat_id=supergroup.id,
+                user_id=bot_username,
+                privileges=ChatPrivileges(
+                    can_manage_chat=True,
+                    can_delete_messages=True,
+                    can_manage_video_chats=True,
+                    can_restrict_members=True,
+                    can_promote_members=True,
+                    can_change_info=True,
+                    can_invite_users=True,
+                    can_pin_messages=True,
+                    is_anonymous=False
+                )
+            )
+            
+            # Promote userbot to anonymous admin
+            me = await user_client.get_me()
+            try:
+                await user_client.promote_chat_member(
+                    chat_id=supergroup.id,
+                    user_id=me.id,
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_delete_messages=True,
+                        can_pin_messages=True,
+                        can_invite_users=True,
+                        can_promote_members=True,
+                        can_restrict_members=True,
+                        can_change_info=True,
+                        is_anonymous=True
+                    )
+                )
+            except Exception as e:
+                print(f"❌ Direct escrow: Failed to promote userbot to anonymous admin: {e}")
+            
+            # Create invite link with join request approval
+            invite_link_obj = await user_client.create_chat_invite_link(
+                supergroup.id,
+                creates_join_request=True
+            )
+            invite_link = invite_link_obj.invite_link
+            escrow_roles[bot_chat_id]['invite_link'] = invite_link
+
+            # Allow regular members to add other members directly
+            await enable_member_invites(user_client, supergroup.id)
+
+            # Send welcome message inside the group
+            welcome_text = """📍 Hey there traders! Welcome to our escrow service.
+✅ Please start with /dd command and fill the DealInfo Form"""
+            
+            sent_welcome = await user_client.send_message(
+                chat_id=supergroup.id,
+                text=f"<b>{welcome_text}</b>",
+                parse_mode=enums.ParseMode.HTML
+            )
+            
+            await user_client.pin_chat_message(
+                chat_id=supergroup.id,
+                message_id=sent_welcome.id,
+                disable_notification=True
+            )
+            
+            # Delete service messages
+            try:
+                async for message in user_client.get_chat_history(supergroup.id, limit=10):
+                    if message.service:
+                        await user_client.delete_messages(supergroup.id, message.id)
+            except Exception as e:
+                print(f"Could not delete service messages: {e}")
+            
+            initiator_username = pending['initiator_username']
+            counterparty_username = pending['counterparty_username']
+            
+            # Get deal stats for both users
+            initiator_stats = user_deal_stats.get(pending['initiator_id'], 0.0)
+            counterparty_stats = user_deal_stats.get(pending.get('counterparty_id'), 0.0) if pending.get('counterparty_id') else 0.0
+            
+            # Build the invite message
+            invite_message_text = (
+                f"{initiator_username} &amp; {counterparty_username} are requested to join this <b>{escrow_type} Escrow Group</b>… Only you two can join this group.\n\n"
+                f"Link : {invite_link}\n\n"
+                f"🚫Beware of scammers🚫\n\n"
+                f"Previous deals Stats:\n"
+                f"{initiator_username} (${initiator_stats:.2f})\n"
+                f"{counterparty_username} (${counterparty_stats:.2f})\n\n"
+                f"Always use @PagaLEscrowBot to stay secured ✅"
+            )
+            
+            # Edit the "Creating safe trading place..." message to show the invite format
+            source_chat_id = pending['source_chat_id']
+            await query.edit_message_text(
+                invite_message_text,
+                parse_mode='HTML',
+                disable_web_page_preview=True
+            )
+            
+            # Store direct escrow tracking info (use the edited message for tracking)
+            direct_escrow_pending[bot_chat_id] = {
+                'initiator_id': pending['initiator_id'],
+                'counterparty_id': pending.get('counterparty_id'),
+                'initiator_username': initiator_username,
+                'counterparty_username': counterparty_username,
+                'invite_message_id': query.message.message_id,
+                'invite_chat_id': source_chat_id,
+                'joined': set(),
+                'supergroup_id': supergroup.id
+            }
+            
+            # Clean up pending selection
+            del direct_escrow_selection[user.id]
             
         except FloodWait as e:
             await query.edit_message_text(f"⏳ Rate limit hit. Please wait {e.value} seconds and try again.")
@@ -825,6 +1731,9 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             escrow_roles[chat_id]['selected_token'] = token
             escrow_roles[chat_id]['selected_network'] = network
             
+            # Update escrow log status to "Token Selected"
+            await update_escrow_log(context, chat_id, new_status="Token Selected")
+            
             # Determine who needs to accept/reject
             # If buyer initiated, show seller info and seller accepts/rejects
             # If seller initiated, show buyer info and buyer accepts/rejects
@@ -842,7 +1751,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             
             message_text = f"""📍 <b>ESCROW DECLARATION</b>
 
-⚡️ <b>{role_name} {display_info['username']} | Userid: [{display_info['user_id']}]</b>
+⚡️ <b>{role_name}</b> {display_info['username']} | Userid: [{display_info['user_id']}]
 
 ✅<b>{token} CRYPTO</b>
 ✅<b>{network_display}</b>"""
@@ -899,8 +1808,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         # Show full escrow declaration with both buyer and seller
         final_message = f"""📍 <b>ESCROW DECLARATION</b>
 
-⚡️ <b>Buyer {buyer_info['username']} | Userid:[{buyer_info['user_id']}]</b>
-⚡️ <b>Seller {seller_info['username']} | Userid: [{seller_info['user_id']}]</b>
+⚡️ <b>Buyer</b> {buyer_info['username']} | Userid: [{buyer_info['user_id']}]
+⚡️ <b>Seller</b> {seller_info['username']} | Userid: [{seller_info['user_id']}]
 
 ✅<b>{token} CRYPTO</b>
 ✅<b>{network_display}</b>"""
@@ -927,11 +1836,11 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         
         # Set release/refund messages based on group type
         if is_otc_group:
-            release_msg = "Will Release The Funds To Seller."
-            refund_msg = "Will Refund The Funds To Buyer."
+            release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
         else:
-            release_msg = "Will Release The Funds To Buyer."
-            refund_msg = "Will Refund The Funds To Seller."
+            release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
         
         # First, update group photo with buyer and seller usernames
         try:
@@ -951,12 +1860,16 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         # Check if both buyer and seller have @PagaLEscrowBot in their bio
         buyer_has_bot = buyer_info.get('has_bot_in_bio', False)
         seller_has_bot = seller_info.get('has_bot_in_bio', False)
+        both_have_bio = buyer_has_bot and seller_has_bot
+        
+        # Get the actual fee percentage (respects global fee setting)
+        actual_fee_percent = get_escrow_fee_percent(both_have_bio) * 100  # Convert to percentage
         
         # Determine fee message
-        if buyer_has_bot and seller_has_bot:
-            fee_message = "<b>Your Fee is 0.5% as both buyer and seller are using @PagaLEscrowBot in your bio.</b>"
+        if both_have_bio:
+            fee_message = f"<b>Your Fee is {actual_fee_percent}% as both buyer and seller are using @PagaLEscrowBot in your bio.</b>"
         else:
-            fee_message = "<b>Your Fee is 1.0% as both buyer and seller are not using @PagaLEscrowBot in your bio.</b>"
+            fee_message = f"<b>Your Fee is {actual_fee_percent}% as both buyer and seller are not using @PagaLEscrowBot in your bio.</b>"
         
         # Send fee message independently
         try:
@@ -972,11 +1885,11 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         transaction_message = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
 
 ⚡️ <b>SELLER</b>
-<b>{seller_info['username']} | [{seller_info['user_id']}]</b>
+{seller_info['username']} | [{seller_info['user_id']}]
 {seller_info['address']} <b>[{token}] [{network}]</b>
 
 ⚡️ <b>BUYER</b>
-<b>{buyer_info['username']} | [{buyer_info['user_id']}]</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
 {buyer_info['address']} <b>[{token}] [{network}]</b>
 
 ⏰ <b>Trade Start Time: {trade_start_time}</b>
@@ -1009,21 +1922,8 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         except Exception as e:
             print(f"❌ Error sending transaction message: {e}")
         
-        # Send log to logs channel with buyer and seller info
-        try:
-            # Determine group type based on chat title
-            chat = await context.bot.get_chat(chat_id=chat_id)
-            group_type = "OTC" if "OTC" in chat.title else "P2P"
-            
-            await send_group_creation_log(
-                context=context,
-                chat_id=chat_id,
-                buyer_username=buyer_info['username'],
-                seller_username=seller_info['username'],
-                group_type=group_type
-            )
-        except Exception as e:
-            print(f"Error sending log to channel: {e}")
+        # Log is now sent earlier in /dd command, just update status here
+        await update_escrow_log(context, chat_id, new_status="Token Selected")
     
     elif query.data == "reject_escrow":
         # Handle escrow rejection - delete the message
@@ -1074,8 +1974,12 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             network_label = "TRC20"
         elif query.data == "fakedepo_bep20":
             network = "BSC"
-            fake_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
+            fake_address = "0x4DE23f3f0Fb3318287378AdbdE030cf61714b2f3"
             network_label = "BEP20"
+        elif query.data == "fakedepo_bsc_suraj":
+            network = "BSC"
+            fake_address = "0xf282e789e835ed379aea84ece204d2d643e6774f"
+            network_label = "BSC] [SURAJ"
         else:
             await query.answer("⚠️ Unknown network selected!", show_alert=True)
             return
@@ -1139,11 +2043,15 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         if escrow_address in monitored_addresses:
             monitored_balance = monitored_addresses[escrow_address]['total_balance']
         
+        # Subtract baseline to get only deposits made after /deposit command
+        baseline_balance = escrow_roles[chat_id].get('baseline_balance', 0)
+        deal_balance = max(0, monitored_balance - baseline_balance)
+        
         # Get manually added balance (from /addbalance)
         manual_balance = escrow_roles[chat_id].get('balance', 0)
         
-        # Total balance = monitored + manual
-        current_balance = monitored_balance + manual_balance
+        # Total balance = deal deposits + manual
+        current_balance = deal_balance + manual_balance
         
         # Calculate time elapsed since deposit request
         last_deposit_time = escrow_roles[chat_id].get('last_deposit_time')
@@ -1165,33 +2073,33 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
         
         # Set release/refund messages based on group type
         if is_otc_group:
-            release_msg = "Will Release The Funds To Seller."
-            refund_msg = "Will Refund The Funds To Buyer."
+            release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
         else:
-            release_msg = "Will Release The Funds To Buyer."
-            refund_msg = "Will Refund The Funds To Seller."
+            release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
         
         # Recreate the deposit message with updated balance
         deposit_message = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
 
 ⚡️ <b>SELLER</b>
-<b>{seller_info['username']} | [{seller_info['user_id']}]</b>
+{seller_info['username']} | [{seller_info['user_id']}]
 ⚡️ <b>BUYER</b>
-<b>{buyer_info['username']} | [{buyer_info['user_id']}]</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
 🟢 <b>ESCROW ADDRESS</b>
 <code>{escrow_address}</code> <b>[{token}] [{network_label}]</b>
 
 {payment_instruction}
 
-<b>Amount Recieved: {current_balance:.5f} [{current_balance:.2f}$]</b>
+Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}$]</u></b>
 
 ⏰ <b>Trade Start Time: {trade_start_time}</b>
 ⏰ <b>Address Reset In: {remaining_time:.2f} Min</b>
 
 📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
 <b>Useful commands:</b>
-🗒 <b>/release = {release_msg}</b>
-🗒 <b>/refund = {refund_msg}</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
 
 <b>Remember, once commands are used payment will be released, there is no revert!</b>"""
         
@@ -1222,6 +2130,1009 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             reply_markup=reply_markup
         )
     
+    elif query.data.startswith("release_buyer_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in release_pending:
+            release_data = release_pending[message_id]
+            
+            if query.from_user.id == release_data['buyer_id']:
+                release_data['buyer_confirmed'] = True
+                
+                buyer_status = "✅" if release_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if release_data['seller_confirmed'] else "❌"
+                
+                if release_data['buyer_confirmed'] and release_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"release_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"release_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"release_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = release_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if release_data['seller_confirmed'] and "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if not release_data['seller_confirmed']:
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    status_msg = f"<b><u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Release withdrawl, waiting for <u>Seller</u>[<u>@{seller_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=status_msg, parse_mode='HTML')
+                elif release_data['seller_confirmed']:
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Release withdrawl.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[release_data['chat_id']].get('balance', 0)
+                    release_progress_msg = f"<b>Release of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=release_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = release_data.get('buyer_has_bio', False) and release_data.get('seller_has_bio', False)
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[release_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[release_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been released to the <u>Buyer</u>'s address! 🚀
+
+Approved By: @{buyer_name} | [{release_data['buyer_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    buyer_address = release_data.get('buyer_address', '')
+                    if buyer_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{buyer_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{buyer_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            link_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            link_markup = None
+                    else:
+                        link_markup = None
+                    
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
+                    
+                    await send_deal_result_log(
+                        context,
+                        release_data['chat_id'],
+                        release_data['buyer_username'],
+                        release_data['seller_username'],
+                        amount_after_fees,
+                        refunded=False
+                    )
+                    
+                    try:
+                        release_amt = float(amount) if amount.lower() != 'all' else escrow_balance
+                        current_balance = escrow_roles[release_data['chat_id']].get('balance', 0)
+                        new_balance = max(0, current_balance - release_amt)
+                        escrow_roles[release_data['chat_id']]['balance'] = new_balance
+                        
+                        if new_balance <= 0:
+                            escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                            # Update escrow log status to "Deal Completed"
+                            await update_escrow_log(context, release_data['chat_id'], new_status="Deal Completed")
+                    except:
+                        escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                        # Update escrow log status to "Deal Completed"
+                        await update_escrow_log(context, release_data['chat_id'], new_status="Deal Completed")
+                    
+                    del release_pending[message_id]
+                
+                await query.answer("✅ Buyer confirmed! Waiting for seller confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the buyer can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("release_seller_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in release_pending:
+            release_data = release_pending[message_id]
+            
+            if query.from_user.id == release_data['seller_id']:
+                release_data['seller_confirmed'] = True
+                
+                buyer_status = "✅" if release_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if release_data['seller_confirmed'] else "❌"
+                
+                if release_data['buyer_confirmed'] and release_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"release_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"release_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"release_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = release_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if release_data['buyer_confirmed'] and "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if release_data['buyer_confirmed'] and release_data['seller_confirmed']:
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Release withdrawl.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[release_data['chat_id']].get('balance', 0)
+                    release_progress_msg = f"<b>Release of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=release_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = release_data.get('buyer_has_bio', False) and release_data.get('seller_has_bio', False)
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[release_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[release_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been released to the <u>Buyer</u>'s address! 🚀
+
+Approved By: @{buyer_name} | [{release_data['buyer_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    buyer_address = release_data.get('buyer_address', '')
+                    if buyer_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{buyer_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{buyer_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            link_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            link_markup = None
+                    else:
+                        link_markup = None
+                    
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
+                    
+                    await send_deal_result_log(
+                        context,
+                        release_data['chat_id'],
+                        release_data['buyer_username'],
+                        release_data['seller_username'],
+                        amount_after_fees,
+                        refunded=False
+                    )
+                    
+                    escrow_roles[release_data['chat_id']]['balance'] -= escrow_balance
+                    
+                    if escrow_roles[release_data['chat_id']]['balance'] <= 0:
+                        escrow_roles[release_data['chat_id']]['deal_complete'] = True
+                        # Update escrow log status to "Deal Completed"
+                        await update_escrow_log(context, release_data['chat_id'], new_status="Deal Completed")
+                    
+                    del release_pending[message_id]
+                else:
+                    seller_name = release_data.get('seller_username', 'Seller').lstrip('@') if release_data.get('seller_username', 'Seller').startswith('@') else release_data.get('seller_username', 'Seller')
+                    buyer_name = release_data['buyer_username'].lstrip('@') if release_data['buyer_username'].startswith('@') else release_data['buyer_username']
+                    status_msg = f"<b><u>Seller</u>[<u>@{seller_name}</u>] have confirmed the Release withdrawl, waiting for <u>Buyer</u>[<u>@{buyer_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=release_data['chat_id'], text=status_msg, parse_mode='HTML')
+                
+                await query.answer("✅ Seller confirmed! Waiting for buyer confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the seller can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("release_reject_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[2])
+        amount = "_".join(parts[3:])
+        
+        message_id = query.message.message_id
+        if message_id in release_pending:
+            release_data = release_pending[message_id]
+            
+            if query.from_user.id in [release_data['buyer_id'], release_data['seller_id']]:
+                await query.edit_message_text(
+                    text="<b>❌ Release confirmation rejected. Transaction cancelled.</b>",
+                    parse_mode='HTML'
+                )
+                await query.answer("❌ Release cancelled!", show_alert=False)
+                del release_pending[message_id]
+            else:
+                await query.answer("❌ Only buyer or seller can reject!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("refund_buyer_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in refund_pending:
+            refund_data = refund_pending[message_id]
+            
+            if query.from_user.id == refund_data['buyer_id']:
+                refund_data['buyer_confirmed'] = True
+                
+                buyer_status = "✅" if refund_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if refund_data['seller_confirmed'] else "❌"
+                
+                if refund_data['buyer_confirmed'] and refund_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"refund_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"refund_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"refund_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = refund_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if refund_data['seller_confirmed'] and "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if not refund_data['seller_confirmed']:
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    status_msg = f"<b><u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Refund, waiting for <u>Seller</u>[<u>@{seller_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=status_msg, parse_mode='HTML')
+                elif refund_data['seller_confirmed']:
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Refund.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[refund_data['chat_id']].get('balance', 0)
+                    refund_progress_msg = f"<b>Refund of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=refund_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = refund_data.get('buyer_has_bio', False) and refund_data.get('seller_has_bio', False)
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[refund_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[refund_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been refunded to the <u>Seller</u>'s address! 🚀
+
+Approved By: @{seller_name} | [{refund_data['seller_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    seller_address = refund_data.get('seller_address', '')
+                    if seller_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{seller_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{seller_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            link_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            link_markup = None
+                    else:
+                        link_markup = None
+                    
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
+                    
+                    await send_deal_result_log(
+                        context,
+                        refund_data['chat_id'],
+                        refund_data['buyer_username'],
+                        refund_data['seller_username'],
+                        amount_after_fees,
+                        refunded=True
+                    )
+                    
+                    escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                    # Update escrow log status to "Deal Completed"
+                    await update_escrow_log(context, refund_data['chat_id'], new_status="Deal Completed")
+                    
+                    del refund_pending[message_id]
+                
+                await query.answer("✅ Buyer confirmed! Waiting for seller confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the buyer can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("refund_seller_confirm_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[3])
+        amount = "_".join(parts[4:])
+        
+        message_id = query.message.message_id
+        if message_id in refund_pending:
+            refund_data = refund_pending[message_id]
+            
+            if query.from_user.id == refund_data['seller_id']:
+                refund_data['seller_confirmed'] = True
+                
+                buyer_status = "✅" if refund_data['buyer_confirmed'] else "❌"
+                seller_status = "✅" if refund_data['seller_confirmed'] else "❌"
+                
+                if refund_data['buyer_confirmed'] and refund_data['seller_confirmed']:
+                    reply_markup = InlineKeyboardMarkup([])
+                else:
+                    keyboard = [
+                        [InlineKeyboardButton(f"Buyer Confirmation {buyer_status}", callback_data=f"refund_buyer_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton(f"Seller Confirmation {seller_status}", callback_data=f"refund_seller_confirm_{chat_id}_{amount}")],
+                        [InlineKeyboardButton("Reject ❌", callback_data=f"refund_reject_{chat_id}_{amount}")]
+                    ]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                base_message = refund_data.get('original_message', query.message.text)
+                updated_text = base_message
+                if refund_data['buyer_confirmed'] and "<b>✅ Buyer Confirmed</b>" not in updated_text:
+                    updated_text += "<b>✅ Buyer Confirmed</b>"
+                if "<b>✅ Seller Confirmed</b>" not in updated_text:
+                    updated_text += "\n<b>✅ Seller Confirmed</b>"
+                
+                await query.edit_message_text(
+                    text=updated_text,
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
+                
+                if refund_data['buyer_confirmed'] and refund_data['seller_confirmed']:
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    both_msg = f"<b>Both <u>Seller</u>[<u>@{seller_name}</u>] and <u>Buyer</u>[<u>@{buyer_name}</u>] have confirmed the Refund.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=both_msg, parse_mode='HTML')
+                    
+                    escrow_balance = escrow_roles[refund_data['chat_id']].get('balance', 0)
+                    refund_progress_msg = f"<b>Refund of payment {escrow_balance:.5f} usdt is in progress.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=refund_progress_msg, parse_mode='HTML')
+                    
+                    await asyncio.sleep(10)
+                    
+                    network_fee = 0.10
+                    both_have_bio = refund_data.get('buyer_has_bio', False) and refund_data.get('seller_has_bio', False)
+                    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
+                    escrow_fee = escrow_balance * escrow_fee_percent
+                    amount_after_fees = escrow_balance - network_fee - escrow_fee
+                    
+                    token = escrow_roles[refund_data['chat_id']].get('selected_token', 'USDT')
+                    network = escrow_roles[refund_data['chat_id']].get('selected_network', 'BSC')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    
+                    completion_msg = f"""<b>{amount_after_fees:.5f} {token} [{amount_after_fees:.2f}$] 💸 + NETWORK FEE has been refunded to the <u>Seller</u>'s address! 🚀
+
+Approved By: @{seller_name} | [{refund_data['seller_id']}]
+Thank you for using @PagaLEscrowBot 🙌
+
+@{buyer_name} and @{seller_name}, if you liked the bot please leave a good review about the bot and use command /vouch in reply to the review, and please also mention @PagaLEscrowBot in your vouch.</b>"""
+                    
+                    seller_address = refund_data.get('seller_address', '')
+                    if seller_address:
+                        if network == "BSC":
+                            explorer_url = f"https://bscscan.com/address/{seller_address}"
+                        elif network == "TRON":
+                            explorer_url = f"https://tronscan.org/#/address/{seller_address}"
+                        else:
+                            explorer_url = None
+                        
+                        if explorer_url:
+                            keyboard = [[InlineKeyboardButton("Link", url=explorer_url)]]
+                            link_markup = InlineKeyboardMarkup(keyboard)
+                        else:
+                            link_markup = None
+                    else:
+                        link_markup = None
+                    
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
+                    
+                    await send_deal_result_log(
+                        context,
+                        refund_data['chat_id'],
+                        refund_data['buyer_username'],
+                        refund_data['seller_username'],
+                        amount_after_fees,
+                        refunded=True
+                    )
+                    
+                    try:
+                        refund_amt = float(amount) if amount.lower() != 'all' else escrow_balance
+                        current_balance = escrow_roles[refund_data['chat_id']].get('balance', 0)
+                        new_balance = max(0, current_balance - refund_amt)
+                        escrow_roles[refund_data['chat_id']]['balance'] = new_balance
+                        
+                        if new_balance <= 0:
+                            escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                            # Update escrow log status to "Deal Completed"
+                            await update_escrow_log(context, refund_data['chat_id'], new_status="Deal Completed")
+                    except:
+                        escrow_roles[refund_data['chat_id']]['deal_complete'] = True
+                        # Update escrow log status to "Deal Completed"
+                        await update_escrow_log(context, refund_data['chat_id'], new_status="Deal Completed")
+                    
+                    del refund_pending[message_id]
+                else:
+                    seller_name = refund_data.get('seller_username', 'Seller').lstrip('@') if refund_data.get('seller_username', 'Seller').startswith('@') else refund_data.get('seller_username', 'Seller')
+                    buyer_name = refund_data['buyer_username'].lstrip('@') if refund_data['buyer_username'].startswith('@') else refund_data['buyer_username']
+                    status_msg = f"<b><u>Seller</u>[<u>@{seller_name}</u>] have confirmed the Refund, waiting for <u>Buyer</u>[<u>@{buyer_name}</u>] confirmation.</b>"
+                    await context.bot.send_message(chat_id=refund_data['chat_id'], text=status_msg, parse_mode='HTML')
+                
+                await query.answer("✅ Seller confirmed! Waiting for buyer confirmation.", show_alert=False)
+            else:
+                await query.answer("❌ Only the seller can use this button!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("refund_reject_"):
+        parts = query.data.split("_")
+        chat_id = int(parts[2])
+        amount = "_".join(parts[3:])
+        
+        message_id = query.message.message_id
+        if message_id in refund_pending:
+            refund_data = refund_pending[message_id]
+            
+            if query.from_user.id in [refund_data['buyer_id'], refund_data['seller_id']]:
+                await query.edit_message_text(
+                    text="<b>❌ Refund confirmation rejected. Transaction cancelled.</b>",
+                    parse_mode='HTML'
+                )
+                await query.answer("❌ Refund cancelled!", show_alert=False)
+                del refund_pending[message_id]
+            else:
+                await query.answer("❌ Only buyer or seller can reject!", show_alert=True)
+        else:
+            await query.answer("❌ Confirmation session expired!", show_alert=True)
+    
+    elif query.data.startswith("save_chain_"):
+        parts = query.data.split("_")
+        chain = parts[2]  # bsc, tron, btc, or ltc
+        user_id = int(parts[3])
+        
+        # Only the user who initiated the save can select the chain
+        if query.from_user.id != user_id:
+            await query.answer("This is not your save request!", show_alert=True)
+            return
+        
+        # Check if there's a pending save for this user
+        if user_id not in save_pending:
+            await query.answer("Save session expired. Please use /save again.", show_alert=True)
+            return
+        
+        address = save_pending[user_id]
+        
+        # Initialize user's saved addresses if not exists
+        if user_id not in saved_addresses:
+            saved_addresses[user_id] = {}
+        
+        # Save the address for the selected chain
+        saved_addresses[user_id][chain] = address
+        save_saved_addresses()
+        
+        # Remove from pending
+        del save_pending[user_id]
+        
+        # Get chain display name
+        chain_names = {'bsc': 'BSC', 'tron': 'TRON', 'btc': 'BTC', 'ltc': 'LTC'}
+        chain_display = chain_names.get(chain, chain.upper())
+        
+        await query.edit_message_text(
+            f"<b>Your {chain_display} chain address is updated to</b> <code>{address}</code>",
+            parse_mode='HTML'
+        )
+        await query.answer(f"{chain_display} address saved!", show_alert=False)
+    
+    elif query.data == "empty_confirm":
+        # Handle empty confirm button - CEO/OWNER only
+        user = query.from_user
+        if user.id not in [CEO_ID, OWNER_ID]:
+            await query.answer("You are not authorized to use this.", show_alert=True)
+            return
+        
+        await query.answer("Starting deletion process...")
+        
+        # Update message to show progress
+        await query.edit_message_text(
+            "<b>🔍 Fetching all groups...</b>",
+            parse_mode='HTML'
+        )
+        
+        # Ensure userbot is connected
+        try:
+            if not user_client:
+                user_client = Client(
+                    "escrow_user_session",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    phone_number=PHONE
+                )
+            
+            if not user_client.is_connected:
+                await user_client.start()
+        except Exception as e:
+            await query.edit_message_text(
+                f"<b>❌ Failed to connect userbot: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Get ALL groups/channels the userbot is in
+        chat_ids = []
+        try:
+            async for dialog in user_client.get_dialogs():
+                if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                    chat_ids.append(dialog.chat.id)
+        except Exception as e:
+            await query.edit_message_text(
+                f"<b>❌ Failed to fetch groups: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        if not chat_ids:
+            await query.edit_message_text(
+                "<b>No groups found.</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        await query.edit_message_text(
+            f"<b>🗑️ Leaving {len(chat_ids)} groups...</b>\n\n"
+            f"<b>Progress:</b> 0/{len(chat_ids)}",
+            parse_mode='HTML'
+        )
+        
+        failed_count = 0
+        left_count = 0
+        skipped_count = 0
+        failed_chats = []
+        
+        for i, chat_id in enumerate(chat_ids):
+            try:
+                await user_client.leave_chat(chat_id)
+                left_count += 1
+                
+                if chat_id in escrow_roles:
+                    del escrow_roles[chat_id]
+                
+                addresses_to_remove = [addr for addr, info in monitored_addresses.items() if info.get('chat_id') == chat_id]
+                for addr in addresses_to_remove:
+                    del monitored_addresses[addr]
+                
+                print(f"👋 Left group {chat_id}")
+                
+            except FloodWait as e:
+                print(f"⏳ FloodWait: waiting {e.value} seconds...")
+                await asyncio.sleep(e.value)
+                try:
+                    await user_client.leave_chat(chat_id)
+                    left_count += 1
+                    if chat_id in escrow_roles:
+                        del escrow_roles[chat_id]
+                    print(f"👋 Left group {chat_id} (after wait)")
+                except Exception as e2:
+                    error_str = str(e2).upper()
+                    if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str or "USER_NOT_PARTICIPANT" in error_str:
+                        skipped_count += 1
+                        print(f"⏭️ Skipped inaccessible group {chat_id}")
+                    else:
+                        failed_count += 1
+                        failed_chats.append(chat_id)
+                        print(f"❌ Failed to leave group {chat_id}: {e2}")
+                    
+            except Exception as e:
+                error_str = str(e).upper()
+                if "CHANNEL_PRIVATE" in error_str or "CHANNEL_INVALID" in error_str or "CHAT_FORBIDDEN" in error_str or "USER_NOT_PARTICIPANT" in error_str:
+                    skipped_count += 1
+                    print(f"⏭️ Skipped inaccessible group {chat_id}")
+                else:
+                    failed_count += 1
+                    failed_chats.append(chat_id)
+                    print(f"❌ Failed to leave group {chat_id}: {e}")
+            
+            if (i + 1) % 5 == 0 or i == len(chat_ids) - 1:
+                try:
+                    await query.edit_message_text(
+                        f"<b>🗑️ Leaving groups...</b>\n\n"
+                        f"<b>Progress:</b> {i + 1}/{len(chat_ids)}\n"
+                        f"<b>Left:</b> {left_count}\n"
+                        f"<b>Skipped:</b> {skipped_count}\n"
+                        f"<b>Failed:</b> {failed_count}",
+                        parse_mode='HTML'
+                    )
+                except:
+                    pass
+            
+            await asyncio.sleep(0.3)
+        
+        result_msg = f"<b>🗑️ Empty Complete!</b>\n\n"
+        result_msg += f"<b>Total Groups:</b> {len(chat_ids)}\n"
+        result_msg += f"<b>Left:</b> {left_count}\n"
+        result_msg += f"<b>Skipped:</b> {skipped_count}\n"
+        result_msg += f"<b>Failed:</b> {failed_count}"
+        
+        if failed_chats:
+            result_msg += f"\n\n<b>Failed Chat IDs:</b>\n"
+            for chat_id in failed_chats[:10]:
+                result_msg += f"<code>{chat_id}</code>\n"
+            if len(failed_chats) > 10:
+                result_msg += f"... and {len(failed_chats) - 10} more"
+        
+        await query.edit_message_text(result_msg, parse_mode='HTML')
+        print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {left_count} left, {failed_count} failed")
+    
+    elif query.data == "empty_decline":
+        # Handle empty decline button
+        await query.answer("Operation cancelled.")
+        await query.edit_message_text(
+            "<b>❌ Empty operation cancelled.</b>",
+            parse_mode='HTML'
+        )
+    
+    elif query.data.startswith("dealinfo_"):
+        target_chat_id = int(query.data.split("_", 1)[1])
+        deal_details = escrow_roles.get(target_chat_id, {}).get('log_data', {}).get('deal_details')
+
+        if not deal_details:
+            await query.answer("Deal information not filled yet.", show_alert=True)
+            return
+
+        if len(deal_details) <= 190:
+            await query.answer(deal_details, show_alert=True)
+        else:
+            await query.answer()
+            await context.bot.send_message(
+                chat_id=LOGS_CHANNEL_ID,
+                text=f"<b>DEAL INFO</b>\n\n{html.escape(deal_details)}",
+                parse_mode='HTML',
+                reply_to_message_id=query.message.message_id
+            )
+
+    elif query.data == "stats_yesterday":
+        await query.edit_message_text(
+            "<b>Yesterday stats does not exists!</b>",
+            parse_mode='HTML'
+        )
+
+    elif query.data == "stats_last30":
+        await query.edit_message_text(
+            "<b>Last 30 Days global stats does not exists!</b>",
+            parse_mode='HTML'
+        )
+
+    elif query.data == "mystats_increase" or query.data.startswith("mystats_increase_"):
+        caller_id = query.from_user.id
+        await query.answer()
+        
+        if query.data == "mystats_increase":
+            # User increasing own stats
+            awaiting_stats_increase[caller_id] = caller_id
+            await query.edit_message_text(
+                "<b>How much do you want to increase your stats by?</b>\n\n"
+                "Send the amount (e.g. <code>500</code> or <code>1250.50</code>)",
+                parse_mode='HTML'
+            )
+        else:
+            # Admin increasing another user's stats
+            if caller_id not in ADMIN_IDS:
+                await query.answer("Not authorized!", show_alert=True)
+                return
+            target_user_id = int(query.data.replace("mystats_increase_", ""))
+            awaiting_stats_increase[caller_id] = target_user_id
+            await query.edit_message_text(
+                f"<b>How much do you want to increase stats for user <code>{target_user_id}</code>?</b>\n\n"
+                "Send the amount (e.g. <code>500</code> or <code>1250.50</code>)",
+                parse_mode='HTML'
+            )
+    
+    elif query.data.startswith("setaddy_"):
+        # Handle setaddy callback - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        # Parse callback data: setaddy_{chat_id}_{amit|suraj}
+        parts = query.data.split("_", 2)
+        target_chat_id = int(parts[1])
+        owner = parts[2]  # "amit" or "suraj"
+        
+        if target_chat_id not in escrow_roles:
+            await query.answer("⚠️ No active deal found!", show_alert=True)
+            return
+        
+        network = escrow_roles[target_chat_id].get('selected_network')
+        if not network:
+            await query.answer("⚠️ No network selected for this deal!", show_alert=True)
+            return
+        
+        # Get address from configurable escrow_addresses
+        amit_addr = escrow_addresses.get("amit", {}).get(network)
+        suraj_addr = escrow_addresses.get("suraj", {}).get(network)
+        
+        if not amit_addr or not suraj_addr:
+            await query.answer(f"⚠️ No address configured for network: {network}", show_alert=True)
+            return
+        
+        new_address = amit_addr if owner == "amit" else suraj_addr
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Get old address before updating (for monitoring transfer)
+        old_address = escrow_roles[target_chat_id].get('escrow_address')
+        
+        # Set the escrow address for this deal
+        escrow_roles[target_chat_id]['escrow_address'] = new_address
+        
+        # Transfer monitoring from old address to new address
+        if old_address and old_address in monitored_addresses:
+            monitoring_data = monitored_addresses.pop(old_address)
+            monitored_addresses[new_address] = monitoring_data
+        
+        # Immediately update the deposit message in the target group chat
+        deposit_message_id = escrow_roles[target_chat_id].get('deposit_message_id')
+        if deposit_message_id:
+            try:
+                roles = escrow_roles[target_chat_id]
+                buyer_info = roles.get('buyer')
+                seller_info = roles.get('seller')
+                token = roles.get('selected_token')
+                transaction_id = roles.get('transaction_id')
+                trade_start_time = roles.get('trade_start_time')
+                
+                network_label = network
+                
+                # Get current balance
+                monitored_balance = 0
+                if new_address in monitored_addresses:
+                    monitored_balance = monitored_addresses[new_address]['total_balance']
+                baseline_balance = roles.get('baseline_balance', 0)
+                deal_balance = max(0, monitored_balance - baseline_balance)
+                manual_balance = roles.get('balance', 0)
+                current_balance = deal_balance + manual_balance
+                
+                # Calculate remaining time
+                last_deposit_time = roles.get('last_deposit_time')
+                if last_deposit_time:
+                    time_elapsed = (datetime.now() - last_deposit_time).total_seconds() / 60
+                    remaining_time = max(0, 20 - time_elapsed)
+                else:
+                    remaining_time = 20.00
+                
+                # Determine group type
+                try:
+                    target_chat = await context.bot.get_chat(target_chat_id)
+                    is_otc_group = "OTC" in target_chat.title if target_chat.title else False
+                except Exception:
+                    is_otc_group = False
+                
+                if buyer_info and seller_info:
+                    # Set payment instruction based on group type
+                    if is_otc_group:
+                        payment_instruction = f"<b>Buyer [{buyer_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+                    else:
+                        payment_instruction = f"<b>Seller [{seller_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+                    
+                    # Set release/refund messages based on group type
+                    if is_otc_group:
+                        release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+                        refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
+                    else:
+                        release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+                        refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
+                    
+                    deposit_message_text = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
+
+⚡️ <b>SELLER</b>
+{seller_info['username']} | [{seller_info['user_id']}]
+⚡️ <b>BUYER</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
+🟢 <b>ESCROW ADDRESS</b>
+<code>{new_address}</code> <b>[{token}] [{network_label}]</b>
+
+{payment_instruction}
+
+Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}$]</u></b>
+
+⏰ <b>Trade Start Time: {trade_start_time}</b>
+⏰ <b>Address Reset In: {remaining_time:.2f} Min</b>
+
+📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
+<b>Useful commands:</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
+
+<b>Remember, once commands are used payment will be released, there is no revert!</b>"""
+                    
+                    keyboard = [[InlineKeyboardButton("Check Payment", callback_data="check_payment_deposit")]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    
+                    await context.bot.edit_message_text(
+                        chat_id=target_chat_id,
+                        message_id=deposit_message_id,
+                        text=deposit_message_text,
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+            except Exception as e:
+                print(f"Warning: Could not update deposit message in group {target_chat_id}: {e}")
+        
+        await query.edit_message_text(
+            f"<b>Escrow address updated for chat:</b> <code>{target_chat_id}</code>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Network:</b> {network}\n"
+            f"<b>New address:</b> <code>{new_address}</code>",
+            parse_mode='HTML'
+        )
+        await query.answer(f"✅ Address set to {owner_name}!")
+        print(f"✅ CEO set escrow address for chat {target_chat_id} to {owner_name} ({new_address})")
+
+    elif query.data.startswith("changeaddy_owner_"):
+        # Handle changeaddy owner selection - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        owner = query.data.replace("changeaddy_owner_", "")  # "amit" or "suraj"
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Step 2: Ask which token
+        keyboard = [
+            [InlineKeyboardButton("BTC", callback_data=f"changeaddy_token_{owner}_BTC"),
+             InlineKeyboardButton("LTC", callback_data=f"changeaddy_token_{owner}_LTC")],
+            [InlineKeyboardButton("USDT", callback_data=f"changeaddy_token_{owner}_USDT")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"<b>Change Escrow Address</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n\n"
+            f"<b>Select token:</b>",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    
+    elif query.data.startswith("changeaddy_token_"):
+        # Handle changeaddy token selection - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        # Parse: changeaddy_token_{owner}_{token}
+        parts = query.data.replace("changeaddy_token_", "").split("_", 1)
+        owner = parts[0]
+        token = parts[1]
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Step 3: Ask which network based on token
+        if token == "USDT":
+            keyboard = [
+                [InlineKeyboardButton("BSC", callback_data=f"changeaddy_network_{owner}_{token}_BSC"),
+                 InlineKeyboardButton("TRON", callback_data=f"changeaddy_network_{owner}_{token}_TRON")]
+            ]
+        elif token == "BTC":
+            keyboard = [
+                [InlineKeyboardButton("BTC", callback_data=f"changeaddy_network_{owner}_{token}_BTC")]
+            ]
+        elif token == "LTC":
+            keyboard = [
+                [InlineKeyboardButton("LTC", callback_data=f"changeaddy_network_{owner}_{token}_LTC"),
+                 InlineKeyboardButton("BSC", callback_data=f"changeaddy_network_{owner}_{token}_BSC")]
+            ]
+        else:
+            keyboard = []
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"<b>Change Escrow Address</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Token:</b> {token}\n\n"
+            f"<b>Select network:</b>",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    
+    elif query.data.startswith("changeaddy_network_"):
+        # Handle changeaddy network selection - CEO only
+        user_id = query.from_user.id
+        if user_id != CEO_ID:
+            await query.answer("⚠️ Not authorized!", show_alert=True)
+            return
+        
+        # Parse: changeaddy_network_{owner}_{token}_{network}
+        parts = query.data.replace("changeaddy_network_", "").split("_", 2)
+        owner = parts[0]
+        token = parts[1]
+        network = parts[2]
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Get current address for this owner/network
+        current_address = escrow_addresses.get(owner, {}).get(network, "Not set")
+        
+        # Store pending changeaddy state for this user
+        awaiting_changeaddy[user_id] = {
+            'owner': owner,
+            'token': token,
+            'network': network
+        }
+        
+        await query.edit_message_text(
+            f"<b>Change Escrow Address</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Token:</b> {token}\n"
+            f"<b>Network:</b> {network}\n"
+            f"<b>Current address:</b> <code>{current_address}</code>\n\n"
+            f"<b>Send the new address:</b>",
+            parse_mode='HTML'
+        )
+
     elif query.data == "back_to_start":
         welcome_message = """💫 @PagaLEscrowBot 💫
 Your Trustworthy Telegram Escrow Service
@@ -1256,34 +3167,84 @@ Avoid scams, your funds are safeguarded throughout your deals. If you run into a
 
 async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /buyer command with crypto address"""
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    
-    # Check if command has arguments (crypto address)
-    if not context.args or len(context.args) == 0:
-        # Send image with usage instructions
-        caption = (
-            "<code>/buyer [Your Crypto Address]</code>\n\n"
-            "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
-        )
-        try:
-            with open('attached_assets/canvas_1762800859705.png', 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=caption,
-                    parse_mode='HTML'
-                )
-        except FileNotFoundError:
-            # Fallback to text if image not found
-            await update.message.reply_text(caption, parse_mode='HTML')
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
         return
     
-    # Get the crypto address from arguments
-    crypto_address = " ".join(context.args)
+    user = update.effective_user
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if command has arguments (crypto address)
+    user_id = user.id
+    using_saved_address = False
+    
+    # Check if user is already the seller in this chat (prevent role switching)
+    if chat_id in escrow_roles and 'seller' in escrow_roles[chat_id]:
+        if escrow_roles[chat_id]['seller']['user_id'] == user_id:
+            await update.message.reply_text(
+                "<b>Sorry! you are not allowed to use this command!</b>",
+                parse_mode='HTML'
+            )
+            return
+    
+    if not context.args or len(context.args) == 0:
+        # Check if user has a saved address (check all chains)
+        if user_id in saved_addresses and saved_addresses[user_id]:
+            # User has saved addresses - use the first available one
+            # Priority: bsc > tron > btc > ltc
+            for chain in ['bsc', 'tron', 'btc', 'ltc']:
+                if chain in saved_addresses[user_id]:
+                    crypto_address = saved_addresses[user_id][chain]
+                    using_saved_address = True
+                    break
+            
+            if not using_saved_address:
+                # No saved address found, show usage instructions
+                caption = (
+                    "<code>/buyer [Your Crypto Address]</code>\n\n"
+                    "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+                )
+                try:
+                    with open('photo_6316666496414845910_y.jpg', 'rb') as photo:
+                        await update.message.reply_photo(
+                            photo=photo,
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                except FileNotFoundError:
+                    await update.message.reply_text(caption, parse_mode='HTML')
+                return
+        else:
+            # No saved addresses, show image with usage instructions
+            caption = (
+                "<code>/buyer [Your Crypto Address]</code>\n\n"
+                "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+            )
+            try:
+                with open('photo_6316666496414845910_y.jpg', 'rb') as photo:
+                    await update.message.reply_photo(
+                        photo=photo,
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+            except FileNotFoundError:
+                await update.message.reply_text(caption, parse_mode='HTML')
+            return
+    else:
+        # Get the crypto address from arguments
+        crypto_address = " ".join(context.args)
     
     # Get username (or use first name if no username)
     username = f"@{user.username}" if user.username else user.first_name
-    user_id = user.id
     
     # Initialize chat in escrow_roles if not exists
     if chat_id not in escrow_roles:
@@ -1307,7 +3268,7 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Try Bot API first
     try:
         user_chat = await context.bot.get_chat(user_id)
-        if user_chat.bio and "@PagaLEscrowBot" in user_chat.bio:
+        if user_chat.bio and "@pagalescrowbot" in user_chat.bio.lower():
             has_bot_in_bio = True
             print(f"✅ Bio detected via Bot API for user {user_id}")
     except Exception as e:
@@ -1321,14 +3282,24 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await user_client.start()
             
             pyrogram_user = await user_client.get_users(user_id)
-            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@PagaLEscrowBot" in pyrogram_user.bio:
+            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@pagalescrowbot" in pyrogram_user.bio.lower():
                 has_bot_in_bio = True
                 print(f"✅ Bio detected via Pyrogram for user {user_id}")
         except Exception as pyro_error:
             print(f"Pyrogram bio check failed for user {user_id}: {pyro_error}")
     
-    # Format the message
-    response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+    # Format the message - show address if user provided it (not using saved address)
+    if using_saved_address:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+
+⚡️ <b>BUYER {username} | Userid: [{user_id}]</b>
+
+✅ <b>BUYER WALLET</b>
+
+
+<i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
+    else:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
 
 ⚡️ <b>BUYER {username} | Userid: [{user_id}]</b>
 
@@ -1350,33 +3321,6 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'has_bot_in_bio': has_bot_in_bio
     }
     
-    # Rename group with transaction ID (8-digit number) if not already renamed
-    try:
-        if not escrow_roles[chat_id].get('group_renamed', False):
-            # Get transaction ID (from group creation)
-            transaction_id = escrow_roles[chat_id].get('transaction_id')
-            if transaction_id:
-                # Get current group info
-                chat = await context.bot.get_chat(chat_id)
-                current_title = chat.title
-                
-                # Only rename if transaction ID is not already in the title
-                if str(transaction_id) not in current_title:
-                    # Determine escrow type based on current title
-                    if "P2P" in current_title:
-                        new_title = f"P2P Escrow By PAGAL Bot ({transaction_id})"
-                    elif "OTC" in current_title:
-                        new_title = f"OTC Escrow By PAGAL Bot ({transaction_id})"
-                    else:
-                        new_title = f"Product Deal Escrow By PAGAL Bot ({transaction_id})"
-                    
-                    # Rename the group
-                    await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
-                    escrow_roles[chat_id]['group_renamed'] = True
-                    print(f"✅ Group renamed to: {new_title}")
-    except Exception as e:
-        print(f"Error renaming group in /buyer: {e}")
-    
     # Only prompt if buyer was NOT already set before
     if not buyer_already_set:
         # Check if seller is already set
@@ -1386,43 +3330,101 @@ async def buyer_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "<b>Please set seller using /seller [DEPOSIT ADDRESS]</b>",
                 parse_mode='HTML'
             )
+            # Update log: Buyer set, waiting for seller
+            await update_escrow_log(context, chat_id, 
+                new_status="Buyer Address Set Waiting For Seller Address To Be Set",
+                buyer_username=username)
         else:
             # Both buyer and seller are set
             await update.message.reply_text(
                 "<b>Use /token to Choose crypto.</b>",
                 parse_mode='HTML'
             )
+            # Update log: Both parties set
+            await update_escrow_log(context, chat_id, 
+                new_status="Both Parties Address Set",
+                buyer_username=username)
 
 async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /seller command with crypto address"""
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    
-    # Check if command has arguments (crypto address)
-    if not context.args or len(context.args) == 0:
-        # Send image with usage instructions
-        caption = (
-            "<code>/seller [Your Crypto Address]</code>\n\n"
-            "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
-        )
-        try:
-            with open('attached_assets/canvas_1762800844102.png', 'rb') as photo:
-                await update.message.reply_photo(
-                    photo=photo,
-                    caption=caption,
-                    parse_mode='HTML'
-                )
-        except FileNotFoundError:
-            # Fallback to text if image not found
-            await update.message.reply_text(caption, parse_mode='HTML')
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
         return
     
-    # Get the crypto address from arguments
-    crypto_address = " ".join(context.args)
+    user = update.effective_user
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if command has arguments (crypto address)
+    user_id = user.id
+    using_saved_address = False
+    
+    # Check if user is already the buyer in this chat (prevent role switching)
+    if chat_id in escrow_roles and 'buyer' in escrow_roles[chat_id]:
+        if escrow_roles[chat_id]['buyer']['user_id'] == user_id:
+            await update.message.reply_text(
+                "<b>Sorry! you are not allowed to use this command!</b>",
+                parse_mode='HTML'
+            )
+            return
+    
+    if not context.args or len(context.args) == 0:
+        # Check if user has a saved address (check all chains)
+        if user_id in saved_addresses and saved_addresses[user_id]:
+            # User has saved addresses - use the first available one
+            # Priority: bsc > tron > btc > ltc
+            for chain in ['bsc', 'tron', 'btc', 'ltc']:
+                if chain in saved_addresses[user_id]:
+                    crypto_address = saved_addresses[user_id][chain]
+                    using_saved_address = True
+                    break
+            
+            if not using_saved_address:
+                # No saved address found, show usage instructions
+                caption = (
+                    "<code>/seller [Your Crypto Address]</code>\n\n"
+                    "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+                )
+                try:
+                    with open('photo_6314481552062090385_y.jpg', 'rb') as photo:
+                        await update.message.reply_photo(
+                            photo=photo,
+                            caption=caption,
+                            parse_mode='HTML'
+                        )
+                except FileNotFoundError:
+                    await update.message.reply_text(caption, parse_mode='HTML')
+                return
+        else:
+            # No saved addresses, show image with usage instructions
+            caption = (
+                "<code>/seller [Your Crypto Address]</code>\n\n"
+                "⛓️ <b>Chains Supported:</b> ltc, tron, bsc, btc"
+            )
+            try:
+                with open('photo_6314481552062090385_y.jpg', 'rb') as photo:
+                    await update.message.reply_photo(
+                        photo=photo,
+                        caption=caption,
+                        parse_mode='HTML'
+                    )
+            except FileNotFoundError:
+                await update.message.reply_text(caption, parse_mode='HTML')
+            return
+    else:
+        # Get the crypto address from arguments
+        crypto_address = " ".join(context.args)
     
     # Get username (or use first name if no username)
     username = f"@{user.username}" if user.username else user.first_name
-    user_id = user.id
     
     # Initialize chat in escrow_roles if not exists
     if chat_id not in escrow_roles:
@@ -1446,7 +3448,7 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Try Bot API first
     try:
         user_chat = await context.bot.get_chat(user_id)
-        if user_chat.bio and "@PagaLEscrowBot" in user_chat.bio:
+        if user_chat.bio and "@pagalescrowbot" in user_chat.bio.lower():
             has_bot_in_bio = True
             print(f"✅ Bio detected via Bot API for user {user_id}")
     except Exception as e:
@@ -1460,14 +3462,24 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await user_client.start()
             
             pyrogram_user = await user_client.get_users(user_id)
-            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@PagaLEscrowBot" in pyrogram_user.bio:
+            if hasattr(pyrogram_user, 'bio') and pyrogram_user.bio and "@pagalescrowbot" in pyrogram_user.bio.lower():
                 has_bot_in_bio = True
                 print(f"✅ Bio detected via Pyrogram for user {user_id}")
         except Exception as pyro_error:
             print(f"Pyrogram bio check failed for user {user_id}: {pyro_error}")
     
-    # Format the message
-    response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+    # Format the message - show address if user provided it (not using saved address)
+    if using_saved_address:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
+
+⚡️ <b>SELLER {username} | Userid: [{user_id}]</b>
+
+✅ <b>SELLER WALLET</b>
+
+
+<i>Note: If you don't see any address, then your address will used from saved addresses after selecting token and chain for the current escrow.</i>"""
+    else:
+        response_message = f"""📍<b>ESCROW-ROLE DECLARATION</b>
 
 ⚡️ <b>SELLER {username} | Userid: [{user_id}]</b>
 
@@ -1489,33 +3501,6 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'has_bot_in_bio': has_bot_in_bio
     }
     
-    # Rename group with transaction ID (8-digit number) if not already renamed
-    try:
-        if not escrow_roles[chat_id].get('group_renamed', False):
-            # Get transaction ID (from group creation)
-            transaction_id = escrow_roles[chat_id].get('transaction_id')
-            if transaction_id:
-                # Get current group info
-                chat = await context.bot.get_chat(chat_id)
-                current_title = chat.title
-                
-                # Only rename if transaction ID is not already in the title
-                if str(transaction_id) not in current_title:
-                    # Determine escrow type based on current title
-                    if "P2P" in current_title:
-                        new_title = f"P2P Escrow By PAGAL Bot ({transaction_id})"
-                    elif "OTC" in current_title:
-                        new_title = f"OTC Escrow By PAGAL Bot ({transaction_id})"
-                    else:
-                        new_title = f"Product Deal Escrow By PAGAL Bot ({transaction_id})"
-                    
-                    # Rename the group
-                    await context.bot.set_chat_title(chat_id=chat_id, title=new_title)
-                    escrow_roles[chat_id]['group_renamed'] = True
-                    print(f"✅ Group renamed to: {new_title}")
-    except Exception as e:
-        print(f"Error renaming group in /seller: {e}")
-    
     # Only prompt if seller was NOT already set before
     if not seller_already_set:
         # Check if buyer is already set
@@ -1525,15 +3510,27 @@ async def seller_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "<b>Please set buyer using /buyer [DEPOSIT ADDRESS]</b>",
                 parse_mode='HTML'
             )
+            # Update log: Seller set, waiting for buyer
+            await update_escrow_log(context, chat_id, 
+                new_status="Seller Address Set Waiting For Buyer Address To Be Set",
+                seller_username=username)
         else:
             # Both buyer and seller are set
             await update.message.reply_text(
                 "<b>Use /token to Choose crypto.</b>",
                 parse_mode='HTML'
             )
+            # Update log: Both parties set
+            await update_escrow_log(context, chat_id, 
+                new_status="Both Parties Address Set",
+                seller_username=username)
 
 async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /token command to choose cryptocurrency"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     
@@ -1557,6 +3554,11 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Only the first user who sends /token can use it; ignore others (admins bypass)
+    existing_initiator = escrow_roles.get(chat_id, {}).get('token_initiator')
+    if existing_initiator and existing_initiator != user_id and user_id not in ADMIN_IDS:
+        return
+    
     # Store who initiated the /token command
     escrow_roles[chat_id]['token_initiator'] = user_id
     
@@ -1576,7 +3578,20 @@ async def token_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /deposit command to generate deposit address"""
-    chat_id = update.effective_chat.id
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Check if escrow data exists
     if chat_id not in escrow_roles:
@@ -1605,6 +3620,12 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # Only the first user who sends /deposit can use it; ignore others (admins bypass)
+    user_id = update.effective_user.id
+    existing_depositor = escrow_roles.get(chat_id, {}).get('deposit_initiator')
+    if existing_depositor and existing_depositor != user_id and user_id not in ADMIN_IDS:
+        return
+    
     # Check if token and network are selected
     token = escrow_roles[chat_id].get('selected_token')
     network = escrow_roles[chat_id].get('selected_network')
@@ -1614,6 +3635,9 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "⚠️ Please select token and network first using /token command."
         )
         return
+    
+    # Store who initiated the /deposit command
+    escrow_roles[chat_id]['deposit_initiator'] = user_id
     
     # Check if deposit was used recently (20-minute cooldown)
     last_deposit_time = escrow_roles[chat_id].get('last_deposit_time')
@@ -1648,70 +3672,29 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fake_deposit_network = escrow_roles[chat_id].get('fake_deposit_network')
     fake_deposit_address = escrow_roles[chat_id].get('fake_deposit_address')
     
-    # Determine escrow address and network label based on network
-    if token == "USDT":
-        if network == "BSC":
-            # Check if fakedepo is enabled for BSC
-            if fake_deposit_enabled and fake_deposit_network == "BSC":
-                escrow_address = fake_deposit_address
-            else:
-                # Alternate between two BSC addresses
-                bsc_addresses = [
-                    "0xDA4c2a5B876b0c7521e1c752690D8705080000fE",
-                    "0xf282e789e835ed379aea84ece204d2d643e6774f"
-                ]
-                escrow_address = random.choice(bsc_addresses)
-            network_label = "BSC"
-        elif network == "TRON":
-            # Check if fakedepo is enabled for TRON
-            if fake_deposit_enabled and fake_deposit_network == "TRON":
-                escrow_address = fake_deposit_address
-            else:
-                # Alternate between two TRON addresses
-                tron_addresses = [
-                    "TVsTYwseYdRXUKk2ehcEcTT4UU3b2tqrVm",
-                    "TXFyTRL3vau3DJe6kyxqUeazoscN8dRrHB"
-                ]
-                escrow_address = random.choice(tron_addresses)
-            network_label = "TRON"
-        else:
-            await update.message.reply_text("⚠️ Unsupported network for deposit.")
-            return
-    elif token == "BTC":
-        if network == "BTC":
-            # Alternate between two BTC addresses
-            btc_addresses = [
-                "bc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcyflnak",
-                "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48"
-            ]
-            escrow_address = random.choice(btc_addresses)
-            network_label = "BTC"
-        else:
-            await update.message.reply_text("⚠️ Unsupported network for BTC.")
-            return
-    elif token == "LTC":
-        if network == "LTC":
-            # Alternate between two LTC addresses
-            ltc_addresses = [
-                "ltc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcq49h9x",
-                "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66"
-            ]
-            escrow_address = random.choice(ltc_addresses)
-            network_label = "LTC"
-        elif network == "BSC":
-            # Alternate between two BSC addresses (same as USDT[BSC])
-            bsc_addresses = [
-                "0xDA4c2a5B876b0c7521e1c752690D8705080000fE",
-                "0xf282e789e835ed379aea84ece204d2d643e6774f"
-            ]
-            escrow_address = random.choice(bsc_addresses)
-            network_label = "BSC"
-        else:
-            await update.message.reply_text("⚠️ Unsupported network for LTC.")
-            return
+    # Use pre-set address from /setaddy if available, otherwise randomly select
+    pre_set_address = escrow_roles[chat_id].get('escrow_address')
+    
+    if pre_set_address:
+        # Address was already set via /setaddy - use it directly
+        escrow_address = pre_set_address
+        network_label = network
+    elif fake_deposit_enabled and fake_deposit_network == network:
+        # Fakedepo is enabled for this network
+        escrow_address = fake_deposit_address
+        network_label = network
     else:
-        await update.message.reply_text(f"⚠️ Deposit is currently not supported for {token}.")
-        return
+        # Get addresses from configurable escrow_addresses
+        amit_addr = escrow_addresses.get("amit", {}).get(network)
+        suraj_addr = escrow_addresses.get("suraj", {}).get(network)
+        
+        if not amit_addr or not suraj_addr:
+            await update.message.reply_text(f"⚠️ No address configured for network: {network}")
+            return
+        
+        # Randomly select between amit and suraj addresses
+        escrow_address = random.choice([amit_addr, suraj_addr])
+        network_label = network
     
     # Determine group type (OTC/Product Deal vs P2P)
     chat = update.effective_chat
@@ -1725,11 +3708,11 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Set release/refund messages based on group type
     if is_otc_group:
-        release_msg = "Will Release The Funds To Seller."
-        refund_msg = "Will Refund The Funds To Buyer."
+        release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+        refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
     else:
-        release_msg = "Will Release The Funds To Buyer."
-        refund_msg = "Will Refund The Funds To Seller."
+        release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+        refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
     
     # Check for existing balance (manual balance added by admin)
     manual_balance = escrow_roles[chat_id].get('balance', 0)
@@ -1739,23 +3722,23 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deposit_message = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
 
 ⚡️ <b>SELLER</b>
-<b>{seller_info['username']} | [{seller_info['user_id']}]</b>
+{seller_info['username']} | [{seller_info['user_id']}]
 ⚡️ <b>BUYER</b>
-<b>{buyer_info['username']} | [{buyer_info['user_id']}]</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
 🟢 <b>ESCROW ADDRESS</b>
 <code>{escrow_address}</code> <b>[{token}] [{network_label}]</b>
 
 {payment_instruction}
 
-<b>Amount Recieved: {initial_balance:.5f} [{initial_balance:.2f}$]</b>
+Amount Recieved: <code>{initial_balance:.5f}</code> <b><u>[{initial_balance:.2f}$]</u></b>
 
 ⏰ <b>Trade Start Time: {trade_start_time}</b>
 ⏰ <b>Address Reset In: 20.00 Min</b>
 
 📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
 <b>Useful commands:</b>
-🗒 <b>/release = {release_msg}</b>
-🗒 <b>/refund = {refund_msg}</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
 
 <b>Remember, once commands are used payment will be released, there is no revert!</b>"""
     
@@ -1763,9 +3746,8 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Check Payment", callback_data="check_payment_deposit")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Delete waiting message
-    await waiting_msg.delete()
-    
+    # Keep the "Requesting a deposit address..." message (do not delete it)
+
     # Send deposit information as reply to /deposit command
     deposit_msg = await update.message.reply_text(deposit_message, parse_mode='HTML', reply_markup=reply_markup)
     
@@ -1778,21 +3760,67 @@ async def deposit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Store the escrow address for transaction button
     escrow_roles[chat_id]['escrow_address'] = escrow_address
     
+    # Update escrow log status to "Deposit Address Sent" with last 4 chars of address
+    last_4_chars = escrow_address[-4:]
+    await update_escrow_log(context, chat_id, new_status="Deposit Address Sent", extra_info=last_4_chars)
+    
     # Start monitoring this address for deposits
+    # First, fetch current balance to avoid false positives from historical transactions
+    initial_balance = 0
+    last_seen_tx = None
+    
+    try:
+        if network == "BSC":
+            transactions = await check_bsc_transactions(escrow_address)
+            if transactions:
+                # Calculate existing balance from all historical transactions
+                for tx in transactions:
+                    initial_balance += int(tx['value']) / (10 ** 18)
+                # Store the most recent transaction hash to avoid re-processing
+                last_seen_tx = transactions[0].get('hash')  # transactions are sorted desc
+        elif network == "TRON":
+            transactions = await check_tron_transactions(escrow_address)
+            if transactions:
+                # Calculate existing balance from all historical transactions
+                for tx in transactions:
+                    initial_balance += int(tx['value']) / (10 ** 6)
+                # Store the most recent transaction ID to avoid re-processing
+                last_seen_tx = transactions[0].get('transaction_id')
+    except Exception as e:
+        print(f"Warning: Could not fetch initial balance for {escrow_address}: {e}")
+    
     monitored_addresses[escrow_address] = {
         'chat_id': chat_id,
         'network': network,
         'token': token,
         'network_label': network_label,
-        'total_balance': 0,
+        'total_balance': initial_balance,
+        'last_seen_tx': last_seen_tx,
         'last_check': datetime.now()
     }
     
-    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id}")
+    # Store the baseline (historical balance) for this chat so we only show deposits made AFTER /deposit
+    # This prevents showing inflated balances from historical transactions on reused addresses
+    escrow_roles[chat_id]['baseline_balance'] = initial_balance
+    
+    print(f"Started monitoring {network} address {escrow_address} for chat {chat_id} (baseline: {initial_balance})")
 
 async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /balance command to show current escrow balance"""
-    chat_id = update.effective_chat.id
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Check if escrow data exists
     if chat_id not in escrow_roles:
@@ -1815,14 +3843,18 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if escrow_address in monitored_addresses:
         monitored_balance = monitored_addresses[escrow_address]['total_balance']
     
+    # Subtract baseline to get only deposits made after /deposit command
+    baseline_balance = escrow_roles[chat_id].get('baseline_balance', 0)
+    deal_balance = max(0, monitored_balance - baseline_balance)
+    
     # Get manually added balance (from /add or /addbalance commands)
     manual_balance = escrow_roles[chat_id].get('balance', 0)
     
-    # Total balance is monitored + manual
-    current_balance = monitored_balance + manual_balance
+    # Total balance = deal deposits + manual
+    current_balance = deal_balance + manual_balance
     
-    # Format message: everything bold except amount (monospace) and USD value (bold+underline)
-    balance_message = f"<b>Current Escrow Balance is: <code>{current_balance:.5f}</code>usdt <u>{current_balance:.2f}$</u></b>"
+    # Format message: everything bold except amount (monospace) and USD value (bold in brackets)
+    balance_message = f"<b>Current Escrow Balance is:</b> <code>{current_balance:.5f}</code>usdt <b>[{current_balance:.2f}$]</b>"
     
     await update.message.reply_text(balance_message, parse_mode='HTML')
 
@@ -1831,12 +3863,8 @@ async def addbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = update.effective_user
     chat_id = update.effective_chat.id
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if escrow data exists
@@ -1877,6 +3905,11 @@ async def addbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Add to balance
     new_balance = current_balance + amount
     escrow_roles[chat_id]['balance'] = new_balance
+    
+    # Update escrow log with new balance as deal_amount
+    await update_escrow_log(context, chat_id, 
+        new_status="Deposit Detected",
+        deal_amount=f"{new_balance:.5f} USDT")
     
     # Send confirmation with the format requested: Amount Received: 500.00 [500.00$]
     await update.message.reply_text(
@@ -1954,101 +3987,145 @@ async def monitor_deposits(bot_app):
                 network_label = info['network_label']
                 token = info['token']
                 current_balance = info['total_balance']
+                last_seen_tx = info.get('last_seen_tx')
                 
                 # Check transactions based on network
                 transactions = []
+                decimals = 18
+                token_name = "UNKNOWN"
+                tx_id_field = 'hash'
+                
                 if network == "BSC":
                     transactions = await check_bsc_transactions(address)
-                    # BSC USDT has 18 decimals
                     decimals = 18
                     token_name = "BSC-USD"
+                    tx_id_field = 'hash'
                 elif network == "TRON":
                     transactions = await check_tron_transactions(address)
-                    # TRON USDT has 6 decimals
                     decimals = 6
                     token_name = "TRON-USDT"
+                    tx_id_field = 'transaction_id'
                 
-                # Calculate total received
-                total_received = 0
-                for tx in transactions:
-                    if network == "BSC":
-                        total_received += int(tx['value']) / (10 ** decimals)
-                    elif network == "TRON":
-                        total_received += int(tx['value']) / (10 ** decimals)
+                if not transactions:
+                    continue
                 
-                # If new deposit detected
-                if total_received > current_balance:
-                    new_amount = total_received - current_balance
-                    monitored_addresses[address]['total_balance'] = total_received
-                    
-                    # Determine if OTC group for release/refund messages
-                    try:
-                        chat = await bot_app.bot.get_chat(chat_id=chat_id)
-                        is_otc_group = "OTC" in chat.title if chat.title else False
-                    except:
-                        is_otc_group = False
-                    
-                    # Set release/refund messages based on group type
-                    if is_otc_group:
-                        release_msg = "Will Release The Funds To Seller."
-                        refund_msg = "Will Refund The Funds To Buyer."
-                    else:
-                        release_msg = "Will Release The Funds To Buyer."
-                        refund_msg = "Will Refund The Funds To Seller."
-                    
-                    # Get the most recent transaction hash
-                    tx_hash = None
-                    if transactions:
-                        latest_tx = transactions[0]  # Most recent transaction
-                        if network == "BSC":
-                            tx_hash = latest_tx.get('hash')
-                        elif network == "TRON":
-                            tx_hash = latest_tx.get('transaction_id')
-                    
-                    # Send deposit confirmation message
-                    confirmation_message = f"""<b>Deposit 💵 has been confirmed
-
-🪙 Token: {token_name}
-💰 Amount: {new_amount:.5f}[{new_amount:.2f}$]
-💸 Balance: {total_received:.5f}[{total_received:.2f}$]
-
-Now you can proceed with the Deal✅
-
-Useful commands:
-🗒 <code>/release</code> = {release_msg}
-🗒 <code>/refund</code> = {refund_msg}</b>"""
-                    
-                    # Create transaction button with hash link (if available)
-                    explorer_url = None
+                # Find new transactions (transactions newer than last_seen_tx)
+                new_transactions = []
+                if last_seen_tx:
+                    # Transactions are sorted desc (newest first)
+                    for tx in transactions:
+                        tx_id = tx.get(tx_id_field)
+                        if tx_id == last_seen_tx:
+                            break  # Stop when we reach the last seen transaction
+                        new_transactions.append(tx)
+                else:
+                    # No last_seen_tx means this is first check after initialization
+                    # The initial balance was already set, so we only process truly new txs
+                    # Calculate current total to compare
+                    total_received = sum(int(tx['value']) / (10 ** decimals) for tx in transactions)
+                    if total_received > current_balance:
+                        # There are new transactions since initialization
+                        # Find them by calculating running total from newest
+                        running_total = 0
+                        for tx in transactions:
+                            tx_amount = int(tx['value']) / (10 ** decimals)
+                            if running_total + tx_amount <= total_received - current_balance:
+                                new_transactions.append(tx)
+                                running_total += tx_amount
+                            else:
+                                break
+                
+                if not new_transactions:
+                    continue
+                
+                # Calculate new deposit amount
+                new_amount = sum(int(tx['value']) / (10 ** decimals) for tx in new_transactions)
+                total_received = current_balance + new_amount
+                
+                # Update monitoring state
+                monitored_addresses[address]['total_balance'] = total_received
+                monitored_addresses[address]['last_seen_tx'] = transactions[0].get(tx_id_field)
+                
+                # Calculate deal-specific balance (subtract baseline to exclude historical deposits)
+                baseline_balance = escrow_roles.get(chat_id, {}).get('baseline_balance', 0)
+                manual_balance = escrow_roles.get(chat_id, {}).get('balance', 0)
+                deal_balance = max(0, total_received - baseline_balance) + manual_balance
+                
+                # Determine if OTC group for release/refund messages
+                try:
+                    chat = await bot_app.bot.get_chat(chat_id=chat_id)
+                    is_otc_group = "OTC" in chat.title if chat.title else False
+                except:
+                    is_otc_group = False
+                
+                # Set release/refund messages based on group type
+                if is_otc_group:
+                    release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+                    refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
+                else:
+                    release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+                    refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
+                
+                # Get the most recent new transaction hash for the link
+                tx_hash = None
+                explorer_url = None
+                if new_transactions:
+                    tx_hash = new_transactions[0].get(tx_id_field, '')
                     if tx_hash:
                         if network == "BSC":
                             explorer_url = f"https://bscscan.com/tx/{tx_hash}"
                         elif network == "TRON":
                             explorer_url = f"https://tronscan.org/#/transaction/{tx_hash}"
-                    else:
-                        # Fallback to address if no hash available
-                        if network == "BSC":
-                            explorer_url = f"https://bscscan.com/address/{address}"
-                        elif network == "TRON":
-                            explorer_url = f"https://tronscan.org/#/address/{address}"
+                
+                if not explorer_url:
+                    # Fallback to address if no hash available
+                    if network == "BSC":
+                        explorer_url = f"https://bscscan.com/address/{address}"
+                    elif network == "TRON":
+                        explorer_url = f"https://tronscan.org/#/address/{address}"
+                
+                # Send deposit confirmation message (use deal_balance which excludes historical deposits)
+                confirmation_message = f"""<b>Deposit 💵 has been confirmed</b>
+
+🪙 <b>Token:</b> {token_name}
+💰 <b>Amount:</b> {new_amount:.5f}[{new_amount:.2f}$]
+💸 <b>Balance:</b> {deal_balance:.5f}[{deal_balance:.2f}$]
+
+<b>Now you can proceed with the Deal✅
+
+Useful commands:</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}"""
+                
+                keyboard = None
+                if explorer_url:
+                    keyboard = [[InlineKeyboardButton("Transaction ➡️", url=explorer_url)]]
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                else:
+                    reply_markup = None
+                
+                try:
+                    await bot_app.bot.send_message(
+                        chat_id=chat_id,
+                        text=confirmation_message,
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
+                    print(f"✅ Deposit detected: {new_amount} USDT on {network} for chat {chat_id}")
                     
-                    keyboard = None
-                    if explorer_url:
-                        keyboard = [[InlineKeyboardButton("Transaction ➡️", url=explorer_url)]]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                    else:
-                        reply_markup = None
-                    
-                    try:
-                        await bot_app.bot.send_message(
-                            chat_id=chat_id,
-                            text=confirmation_message,
-                            parse_mode='HTML',
-                            reply_markup=reply_markup
-                        )
-                        print(f"✅ Deposit detected: {new_amount} USDT on {network} for chat {chat_id}")
-                    except Exception as e:
-                        print(f"Failed to send deposit notification: {e}")
+                    # Update escrow log status to "Deposit Detected" with amount
+                    # Create a mock context-like object for update_escrow_log
+                    class MockContext:
+                        def __init__(self, bot):
+                            self.bot = bot
+                    mock_context = MockContext(bot_app.bot)
+                    # Update deal_amount to show current deal balance (excludes historical deposits)
+                    await update_escrow_log(mock_context, chat_id, 
+                        new_status="Deposit Detected", 
+                        deal_amount=f"{deal_balance:.5f} USDT",
+                        extra_info=f"{new_amount:.2f}")
+                except Exception as e:
+                    print(f"Failed to send deposit notification: {e}")
         
         except Exception as e:
             print(f"Error in deposit monitoring: {e}")
@@ -2060,13 +4137,9 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /add command - admin only, manually confirm deposit"""
     user = update.effective_user
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     print(f"🔍 /add command: User {user.id} ({user.username or user.first_name}) - Admin check: {user.id in ADMIN_IDS}")
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if command is used in DM
@@ -2129,17 +4202,17 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
     
     # Send confirmation message to the group
-    confirmation_message = f"""<b><u>Deposit 💵 has been confirmed</u>
+    confirmation_message = f"""<b>Deposit 💵 has been confirmed</b>
 
 🪙 <b>Token:</b> {token_info}
 💰 <b>Amount:</b> {amount:.5f}[{amount:.2f}$]
 💸 <b>Balance:</b> {new_balance:.5f}[{new_balance:.2f}$]
 
-Now you can proceed with the Deal✅
+<b>Now you can proceed with the Deal✅
 
-<b>Useful commands:</b>
+Useful commands:</b>
 🗒 <code>/release</code> = {release_msg}
-🗒 <code>/refund</code> = {refund_msg}</b>"""
+🗒 <code>/refund</code> = {refund_msg}"""
     
     # Create transaction button if escrow address is available
     reply_markup = None
@@ -2168,6 +4241,11 @@ Now you can proceed with the Deal✅
             escrow_roles[chat_id]['deposit_confirmed'] = True
             escrow_roles[chat_id]['balance'] = new_balance
         
+        # Update escrow log with new balance as deal_amount
+        await update_escrow_log(context, chat_id, 
+            new_status="Deposit Detected",
+            deal_amount=f"{new_balance:.5f} USDT")
+        
         await update.message.reply_text(
             f"<b>✅ Deposit confirmation sent to chat {chat_id}</b>\n"
             f"<b>Amount Added:</b> ${amount:.2f}\n"
@@ -2190,12 +4268,8 @@ async def fakedepo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /fakedepo command - admin only, set specific deposit address for testing"""
     user = update.effective_user
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if command is used in DM
@@ -2240,7 +4314,8 @@ async def fakedepo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Show network selection buttons
     keyboard = [
         [InlineKeyboardButton("USDT[TRC20]", callback_data="fakedepo_trc20")],
-        [InlineKeyboardButton("USDT[BEP20]", callback_data="fakedepo_bep20")]
+        [InlineKeyboardButton("USDT[BEP20]", callback_data="fakedepo_bep20")],
+        [InlineKeyboardButton("USDT[BSC] [SURAJ]", callback_data="fakedepo_bsc_suraj")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -2254,17 +4329,13 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /link command - restricted to CEO and OWNER only"""
     user = update.effective_user
     
-    # Check if user is CEO (Venom) or OWNER (Suraj)
-    CEO_ID = 5229586098
+    # Check if user is CEO (Venom) or OWNER (Suraj) or authorized admin
+    CEO_ID = 6643621069
     OWNER_ID = 6864194951
-    ALLOWED_LINK_USERS = [CEO_ID, OWNER_ID]
+    ALLOWED_LINK_USERS = [CEO_ID, OWNER_ID, 5208040247]
     
     if user.id not in ALLOWED_LINK_USERS:
-        await update.message.reply_text(
-            "<b>Sorry This Command Can Only Be Used By CEO [ Venom ] or OWNER [ Suraj ].</b>",
-            parse_mode='HTML'
-        )
-        return
+        return  # Silent fail for non-authorized users
     
     # Parse command arguments
     if not context.args or len(context.args) < 1:
@@ -2312,17 +4383,13 @@ async def link_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         print(f"❌ Failed to generate invite link: {e}")
 
-async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /blacklist command - admin only, ban replied user or by username"""
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /ban command - admin only, ban replied user or by username from the group"""
     user = update.effective_user
     chat = update.effective_chat
     
-    # Check if user is an admin
+    # Check if user is an admin - silently ignore non-admins
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
         return
     
     # Check if command is used in a group
@@ -2336,7 +4403,7 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_user_id = None
     target_display_name = None
     
-    # Check if a username was provided as argument (e.g., /blacklist @username)
+    # Check if a username was provided as argument (e.g., /ban @username)
     if context.args and len(context.args) > 0:
         username = context.args[0].strip()
         # Remove @ prefix if present
@@ -2344,9 +4411,7 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username = username[1:]
         
         # Try to find the user in recent chat administrators or members
-        # This is a best-effort approach since Bot API doesn't allow username lookup directly
         try:
-            # Try to get chat administrators first
             admins = await context.bot.get_chat_administrators(chat_id=chat.id)
             found = False
             for admin in admins:
@@ -2359,14 +4424,14 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not found:
                 await update.message.reply_text(
                     f"<b>❌ Could not find user @{username}.</b>\n\n"
-                    "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> instead for guaranteed accuracy.",
+                    "<b>Tip:</b> Reply to their message and use <code>/ban</code> instead for guaranteed accuracy.",
                     parse_mode='HTML'
                 )
                 return
         except Exception as e:
             await update.message.reply_text(
                 f"<b>❌ Failed to lookup user @{username}: {str(e)}</b>\n\n"
-                "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> instead.",
+                "<b>Tip:</b> Reply to their message and use <code>/ban</code> instead.",
                 parse_mode='HTML'
             )
             return
@@ -2378,8 +4443,8 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             "<b>⚠️ Usage:</b>\n"
-            "• Reply to a message: <code>/blacklist</code>\n"
-            "• By username: <code>/blacklist @username</code>",
+            "• Reply to a message: <code>/ban</code>\n"
+            "• By username: <code>/ban @username</code>",
             parse_mode='HTML'
         )
         return
@@ -2387,17 +4452,17 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Don't ban other admins
     if target_user_id in ADMIN_IDS:
         await update.message.reply_text(
-            "<b>⚠️ Cannot blacklist other admins.</b>",
+            "<b>⚠️ Cannot ban other admins.</b>",
             parse_mode='HTML'
         )
         return
     
-    # Ban the user
+    # Ban the user from the group
     try:
         await context.bot.ban_chat_member(chat_id=chat.id, user_id=target_user_id)
         
         await update.message.reply_text(
-            f"<b>✅ User {target_display_name} has been blacklisted and banned from this group.</b>",
+            f"<b>✅ User {target_display_name} has been banned from this group.</b>",
             parse_mode='HTML'
         )
     except Exception as e:
@@ -2406,16 +4471,491 @@ async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='HTML'
         )
 
-async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /leave command - admin only, transfer ownership to admin and leave group"""
+async def blacklist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /blacklist command - admin only, globally blacklist a user from using the bot"""
+    user = update.effective_user
+    
+    print(f"🔍 /blacklist called by user {user.id if user else 'None'}, in ADMIN_IDS: {user.id in ADMIN_IDS if user else 'N/A'}")
+    
+    # Check if user is an admin - silently ignore non-admins
+    if user.id not in ADMIN_IDS:
+        print(f"❌ /blacklist: User {user.id} not in ADMIN_IDS")
+        return
+    
+    target_user_id = None
+    target_display_name = None
+    
+    # Check if a username or user ID was provided as argument
+    if context.args and len(context.args) > 0:
+        username = context.args[0].strip()
+        # Remove @ prefix if present
+        if username.startswith('@'):
+            username = username[1:]
+        
+        # Check if it's a numeric user ID
+        if username.isdigit():
+            target_user_id = int(username)
+            target_display_name = f"<code>{target_user_id}</code>"
+        else:
+            # Try to get user from chat administrators if in a group
+            chat = update.effective_chat
+            if chat.type in ['group', 'supergroup']:
+                try:
+                    admins = await context.bot.get_chat_administrators(chat_id=chat.id)
+                    found = False
+                    for admin in admins:
+                        if admin.user.username and admin.user.username.lower() == username.lower():
+                            target_user_id = admin.user.id
+                            target_display_name = f"@{admin.user.username}"
+                            found = True
+                            break
+                    
+                    if not found:
+                        await update.message.reply_text(
+                            f"<b>❌ Could not find user @{username}.</b>\n\n"
+                            "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> or use their numeric user ID.",
+                            parse_mode='HTML'
+                        )
+                        return
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"<b>❌ Failed to lookup user @{username}: {str(e)}</b>\n\n"
+                        "<b>Tip:</b> Reply to their message and use <code>/blacklist</code> or use their numeric user ID.",
+                        parse_mode='HTML'
+                    )
+                    return
+            else:
+                await update.message.reply_text(
+                    f"<b>❌ Cannot lookup username in DMs.</b>\n\n"
+                    "<b>Tip:</b> Use the numeric user ID instead: <code>/blacklist 123456789</code>",
+                    parse_mode='HTML'
+                )
+                return
+    # Check if this is a reply to another message
+    elif update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_display_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+    else:
+        await update.message.reply_text(
+            "<b>⚠️ Usage:</b>\n"
+            "• Reply to a message: <code>/blacklist</code>\n"
+            "• By username: <code>/blacklist @username</code>\n"
+            "• By user ID: <code>/blacklist 123456789</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Don't blacklist other admins
+    if target_user_id in ADMIN_IDS:
+        await update.message.reply_text(
+            "<b>⚠️ Cannot blacklist other admins.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if already blacklisted
+    if target_user_id in blacklisted_users:
+        await update.message.reply_text(
+            f"<b>⚠️ User {target_display_name} is already blacklisted.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Add to blacklist and save to file
+    blacklisted_users.add(target_user_id)
+    save_blacklist()
+    
+    # Also ban from group if command is used in a group
+    chat = update.effective_chat
+    group_ban_status = ""
+    if chat.type in ['group', 'supergroup']:
+        try:
+            await context.bot.ban_chat_member(chat_id=chat.id, user_id=target_user_id)
+            group_ban_status = "\n<b>Group Ban:</b> ✅ Banned from this group"
+        except Exception as e:
+            group_ban_status = f"\n<b>Group Ban:</b> ❌ Failed ({str(e)[:50]})"
+    
+    await update.message.reply_text(
+        f"<b>✅ User {target_display_name} has been globally blacklisted from the bot.</b>\n\n"
+        f"<b>User ID:</b> <code>{target_user_id}</code>{group_ban_status}\n\n"
+        "<b>Note:</b> This user can no longer use any bot functions.",
+        parse_mode='HTML'
+    )
+
+async def whitelist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /whitelist command - CEO/OWNER only, remove a user from the global blacklist"""
+    user = update.effective_user
+    
+    print(f"🔍 /whitelist called by user {user.id if user else 'None'}, CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID}")
+    
+    # Check if user is CEO or OWNER - silently ignore others
+    if user.id not in [CEO_ID, OWNER_ID]:
+        print(f"❌ /whitelist: User {user.id} not authorized (CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID})")
+        return
+    
+    target_user_id = None
+    target_display_name = None
+    
+    # Check if a username or user ID was provided as argument
+    if context.args and len(context.args) > 0:
+        username = context.args[0].strip()
+        # Remove @ prefix if present
+        if username.startswith('@'):
+            username = username[1:]
+        
+        # Check if it's a numeric user ID
+        if username.isdigit():
+            target_user_id = int(username)
+            target_display_name = f"<code>{target_user_id}</code>"
+        else:
+            # Try to get user from chat administrators if in a group
+            chat = update.effective_chat
+            if chat.type in ['group', 'supergroup']:
+                try:
+                    admins = await context.bot.get_chat_administrators(chat_id=chat.id)
+                    found = False
+                    for admin in admins:
+                        if admin.user.username and admin.user.username.lower() == username.lower():
+                            target_user_id = admin.user.id
+                            target_display_name = f"@{admin.user.username}"
+                            found = True
+                            break
+                    
+                    if not found:
+                        await update.message.reply_text(
+                            f"<b>❌ Could not find user @{username}.</b>\n\n"
+                            "<b>Tip:</b> Reply to their message and use <code>/whitelist</code> or use their numeric user ID.",
+                            parse_mode='HTML'
+                        )
+                        return
+                except Exception as e:
+                    await update.message.reply_text(
+                        f"<b>❌ Failed to lookup user @{username}: {str(e)}</b>\n\n"
+                        "<b>Tip:</b> Reply to their message and use <code>/whitelist</code> or use their numeric user ID.",
+                        parse_mode='HTML'
+                    )
+                    return
+            else:
+                await update.message.reply_text(
+                    f"<b>❌ Cannot lookup username in DMs.</b>\n\n"
+                    "<b>Tip:</b> Use the numeric user ID instead: <code>/whitelist 123456789</code>",
+                    parse_mode='HTML'
+                )
+                return
+    # Check if this is a reply to another message
+    elif update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        target_user_id = target_user.id
+        target_display_name = f"@{target_user.username}" if target_user.username else target_user.first_name
+    else:
+        await update.message.reply_text(
+            "<b>⚠️ Usage:</b>\n"
+            "• Reply to a message: <code>/whitelist</code>\n"
+            "• By username: <code>/whitelist @username</code>\n"
+            "• By user ID: <code>/whitelist 123456789</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if user is actually blacklisted
+    if target_user_id not in blacklisted_users:
+        await update.message.reply_text(
+            f"<b>⚠️ User {target_display_name} is not blacklisted.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Remove from blacklist and save to file
+    blacklisted_users.discard(target_user_id)
+    save_blacklist()
+    
+    await update.message.reply_text(
+        f"<b>✅ User {target_display_name} has been removed from the blacklist.</b>\n\n"
+        f"<b>User ID:</b> <code>{target_user_id}</code>\n\n"
+        "<b>Note:</b> This user can now use the bot again.",
+        parse_mode='HTML'
+    )
+
+async def delete_group_via_userbot(context, chat):
+    """Have the userbot join (if needed) and permanently delete the group.
+
+    Returns True on success, False otherwise. Does not send any user-facing
+    messages so it can be reused silently.
+    """
+    try:
+        if not user_client:
+            print("❌ delete_group: userbot not configured")
+            return False
+
+        if not user_client.is_connected:
+            await user_client.start()
+
+        # Generate a single-use invite link for the userbot to join
+        try:
+            chat_invite = await context.bot.create_chat_invite_link(
+                chat_id=chat.id,
+                member_limit=1
+            )
+            invite_link = chat_invite.invite_link
+        except Exception as e:
+            print(f"❌ delete_group: Failed to create invite link: {e}")
+            return False
+
+        await asyncio.sleep(1)
+
+        # Userbot joins the group via the invite link
+        target_chat_id = None
+        try:
+            joined_chat = await user_client.join_chat(invite_link)
+            target_chat_id = joined_chat.id
+        except Exception as e:
+            error_str = str(e)
+            if "USER_ALREADY_PARTICIPANT" in error_str:
+                try:
+                    existing_chat = await user_client.get_chat(invite_link)
+                    target_chat_id = existing_chat.id
+                except Exception:
+                    try:
+                        chat_id_str = str(chat.id)
+                        pyrogram_id = int(chat_id_str) if chat_id_str.startswith("-100") else chat.id
+                        existing_chat = await user_client.get_chat(pyrogram_id)
+                        target_chat_id = existing_chat.id
+                    except Exception as e3:
+                        print(f"❌ delete_group: Failed to get chat info: {e3}")
+                        return False
+            else:
+                print(f"❌ delete_group: Userbot failed to join group: {e}")
+                return False
+
+        await asyncio.sleep(1)
+
+        # Permanently delete the group
+        try:
+            await user_client.delete_supergroup(target_chat_id)
+            return True
+        except Exception as e:
+            print(f"❌ delete_group: delete_supergroup failed: {e}")
+            try:
+                await user_client.delete_chat(target_chat_id)
+                return True
+            except Exception as e2:
+                print(f"❌ delete_group: delete_chat failed: {e2}")
+                return False
+    except Exception as e:
+        print(f"❌ delete_group: unexpected error: {e}")
+        return False
+
+
+async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /close command - all admins can use, ban all members from group and notify CEO with invite link"""
     user = update.effective_user
     chat = update.effective_chat
     
+    print(f"🔍 /close called by user {user.id if user else 'None'}")
+    
+    # Check if user is an admin - silently ignore others
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text(
-            "<b>⚠️ This command is only available for admins.</b>",
-            parse_mode='HTML'
-        )
+        print(f"❌ /close: User {user.id} not authorized")
+        return
+    
+    if chat.type not in ['group', 'supergroup']:
+        return
+    
+    try:
+        # Delete the command message itself
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        
+        # Update escrow log based on deposit status
+        try:
+            if chat.id in escrow_roles:
+                log_message_id = escrow_roles[chat.id].get('log_message_id')
+                log_data = escrow_roles[chat.id].get('log_data', {})
+                status_stage = log_data.get('status_stage', 0)
+                
+                if log_message_id and LOGS_CHANNEL_ID:
+                    # Check if deposit was detected (stage 6 or higher)
+                    if status_stage >= 6:  # Deposit Detected or later
+                        # Keep all info, just update status to "Deal Closed"
+                        log_message = build_escrow_log_message(
+                            chat_id=chat.id,
+                            buyer_username=log_data.get('buyer_username', 'Not set'),
+                            seller_username=log_data.get('seller_username', 'Not set'),
+                            deal_amount=log_data.get('deal_amount', 'Not set'),
+                            group_type=log_data.get('group_type', 'P2P'),
+                            current_status="Deal Closed"
+                        )
+                        await context.bot.edit_message_text(
+                            chat_id=LOGS_CHANNEL_ID,
+                            message_id=log_message_id,
+                            text=log_message,
+                            parse_mode='HTML'
+                        )
+                        print(f"✅ Updated escrow log to 'Deal Closed' (with info) for chat {chat.id}")
+                    else:
+                        # Before deposit detected - just show "Deal Closed!" in bold
+                        await context.bot.edit_message_text(
+                            chat_id=LOGS_CHANNEL_ID,
+                            message_id=log_message_id,
+                            text="<b>Deal Closed!</b>",
+                            parse_mode='HTML'
+                        )
+                        print(f"✅ Updated escrow log to 'Deal Closed!' (no info) for chat {chat.id}")
+        except Exception as e:
+            print(f"⚠️  Failed to update escrow log for close: {e}")
+        
+        # If the CEO runs /close, permanently delete the group (no notification, no /clear needed)
+        if user.id == CEO_ID:
+            deleted = await delete_group_via_userbot(context, chat)
+            if deleted:
+                print(f"✅ CEO {user.id} closed and deleted group {chat.id}")
+            else:
+                print(f"⚠️ CEO {user.id} /close: failed to delete group {chat.id}")
+            return
+        
+        # Generate an invite link to send to CEO
+        invite_link = None
+        try:
+            chat_invite = await context.bot.create_chat_invite_link(
+                chat_id=chat.id,
+                name="Close command backup"
+            )
+            invite_link = chat_invite.invite_link
+        except Exception as e:
+            print(f"⚠️ Failed to create invite link for CEO notification: {e}")
+        
+        # Get all members and ban them (demoting joined admins first) so that
+        # only the bot and the userbot remain in the group afterwards
+        bot_id = context.bot.id
+        banned_count = 0
+        # Only ever keep the bot itself and the userbot
+        skip_ids = {bot_id}
+        try:
+            # Use Pyrogram to get all members for banning
+            if user_client:
+                if not user_client.is_connected:
+                    await user_client.start()
+                
+                try:
+                    userbot_me = await user_client.get_me()
+                    skip_ids.add(userbot_me.id)
+                except Exception:
+                    pass
+                
+                try:
+                    chat_id_str = str(chat.id)
+                    if chat_id_str.startswith("-100"):
+                        pyrogram_id = int(chat_id_str)
+                    else:
+                        pyrogram_id = chat.id
+                    
+                    members_to_ban = []
+                    async for member in user_client.get_chat_members(pyrogram_id, limit=200):
+                        member_id = member.user.id
+                        if member_id not in skip_ids:
+                            members_to_ban.append(member_id)
+                    
+                    for member_id in members_to_ban:
+                        # Demote first (via the userbot, which is the group creator
+                        # and can demote any admin) so admins can be banned too
+                        try:
+                            await user_client.promote_chat_member(
+                                chat_id=pyrogram_id,
+                                user_id=member_id,
+                                privileges=ChatPrivileges(
+                                    can_manage_chat=False,
+                                    can_delete_messages=False,
+                                    can_manage_video_chats=False,
+                                    can_restrict_members=False,
+                                    can_promote_members=False,
+                                    can_change_info=False,
+                                    can_invite_users=False,
+                                    can_pin_messages=False,
+                                    is_anonymous=False,
+                                )
+                            )
+                        except Exception as demote_e:
+                            print(f"⚠️ Userbot could not demote member {member_id}: {demote_e}")
+                        # Ban the (now regular) member
+                        try:
+                            await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
+                            banned_count += 1
+                        except Exception as e:
+                            # Fallback: ban via the userbot
+                            try:
+                                await user_client.ban_chat_member(pyrogram_id, member_id)
+                                banned_count += 1
+                            except Exception as e2:
+                                print(f"⚠️ Failed to ban member {member_id}: {e} / {e2}")
+                    
+                except Exception as e:
+                    print(f"⚠️ Failed to get members via Pyrogram: {e}")
+                    # Fallback: try to ban buyer and seller from escrow_roles
+                    if chat.id in escrow_roles:
+                        roles = escrow_roles[chat.id]
+                        for role in ['buyer', 'seller']:
+                            if role in roles:
+                                member_id = roles[role].get('user_id')
+                                if member_id and member_id != bot_id:
+                                    try:
+                                        await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
+                                        banned_count += 1
+                                    except Exception as ban_e:
+                                        print(f"⚠️ Failed to ban {role} {member_id}: {ban_e}")
+            else:
+                # No userbot - fallback to banning buyer/seller from escrow_roles
+                if chat.id in escrow_roles:
+                    roles = escrow_roles[chat.id]
+                    for role in ['buyer', 'seller']:
+                        if role in roles:
+                            member_id = roles[role].get('user_id')
+                            if member_id and member_id != bot_id:
+                                try:
+                                    await context.bot.ban_chat_member(chat_id=chat.id, user_id=member_id)
+                                    banned_count += 1
+                                except Exception as ban_e:
+                                    print(f"⚠️ Failed to ban {role} {member_id}: {ban_e}")
+        except Exception as e:
+            print(f"⚠️ Failed to ban members: {e}")
+        
+        # Notify CEO in DM with invite link
+        try:
+            group_title = chat.title or f"Group {chat.id}"
+            notify_text = (
+                f"<b>Group Closed</b>\n\n"
+                f"<b>Group:</b> {html.escape(group_title)}\n"
+                f"<b>Chat ID:</b> <code>{chat.id}</code>\n"
+                f"<b>Closed by:</b> {user.first_name} ({user.id})\n"
+                f"<b>Members banned:</b> {banned_count}\n"
+            )
+            if invite_link:
+                notify_text += f"<b>Invite Link:</b> {invite_link}\n"
+            
+            await context.bot.send_message(
+                chat_id=CEO_ID,
+                text=notify_text,
+                parse_mode='HTML'
+            )
+            print(f"✅ Notified CEO about group close")
+        except Exception as e:
+            print(f"⚠️ Failed to notify CEO: {e}")
+        
+        print(f"✅ Admin {user.id} closed group {chat.id}, banned {banned_count} members")
+        
+    except Exception as e:
+        print(f"❌ Failed to close group {chat.id}: {e}")
+
+
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /clear command - CEO only, permanently deletes the group"""
+    user = update.effective_user
+    chat = update.effective_chat
+    
+    # CEO only
+    if user.id != CEO_ID:
         return
     
     if chat.type not in ['group', 'supergroup']:
@@ -2427,34 +4967,111 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         await update.message.reply_text(
-            "<b>🔄 Transferring group ownership to you and leaving...</b>",
+            "<b>🔄 Deleting group permanently...</b>",
             parse_mode='HTML'
         )
         
+        # Check if user_client is available
+        if not user_client:
+            await update.message.reply_text(
+                "<b>❌ Userbot is not configured. Cannot delete group.</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Start user_client if not connected
+        if not user_client.is_connected:
+            await user_client.start()
+        
+        # Generate an invite link for the userbot to join
+        try:
+            chat_invite = await context.bot.create_chat_invite_link(
+                chat_id=chat.id,
+                member_limit=1  # Only one use - for the userbot
+            )
+            invite_link = chat_invite.invite_link
+            print(f"✅ Generated invite link for userbot: {invite_link}")
+        except Exception as e:
+            print(f"❌ Failed to create invite link: {e}")
+            await update.message.reply_text(
+                f"<b>❌ Failed to create invite link: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
         await asyncio.sleep(1)
         
-        if user_client and user_client.is_connected:
-            chat_id_pyrogram = int(str(chat.id).replace("-100", ""))
-            
-            # Transfer ownership to the requesting admin
-            await user_client.set_chat_owner(chat_id_pyrogram, user.id)
-            print(f"✅ Transferred ownership of {chat.id} to admin {user.id}")
-            
-            await asyncio.sleep(0.5)
-            
-            # Bot leaves the group
-            await context.bot.leave_chat(chat_id=chat.id)
-            print(f"✅ Bot left group {chat.id}")
-        else:
-            # Fallback: just leave if user_client not available
-            await context.bot.leave_chat(chat_id=chat.id)
-            print(f"✅ Admin {user.id} made bot leave group {chat.id}")
+        # Userbot joins the group via the invite link
+        target_chat_id = None
+        try:
+            joined_chat = await user_client.join_chat(invite_link)
+            target_chat_id = joined_chat.id
+            print(f"✅ Userbot joined group {chat.id} via invite link, Pyrogram chat ID: {target_chat_id}")
+        except Exception as e:
+            error_str = str(e)
+            if "USER_ALREADY_PARTICIPANT" in error_str:
+                print(f"ℹ️ Userbot already in group, getting chat info...")
+                try:
+                    existing_chat = await user_client.get_chat(invite_link)
+                    target_chat_id = existing_chat.id
+                    print(f"✅ Got existing chat ID via invite link: {target_chat_id}")
+                except Exception as e2:
+                    print(f"❌ Failed to get chat info via invite link: {e2}")
+                    try:
+                        chat_id_str = str(chat.id)
+                        if chat_id_str.startswith("-100"):
+                            pyrogram_id = int(chat_id_str)
+                        else:
+                            pyrogram_id = chat.id
+                        existing_chat = await user_client.get_chat(pyrogram_id)
+                        target_chat_id = existing_chat.id
+                        print(f"✅ Got existing chat ID directly: {target_chat_id}")
+                    except Exception as e3:
+                        print(f"❌ Failed to get chat info directly: {e3}")
+                        await update.message.reply_text(
+                            f"<b>❌ Failed to get chat info: {str(e2)}</b>",
+                            parse_mode='HTML'
+                        )
+                        return
+            else:
+                print(f"❌ Failed to join group: {e}")
+                await update.message.reply_text(
+                    f"<b>❌ Userbot failed to join group: {str(e)}</b>",
+                    parse_mode='HTML'
+                )
+                return
+        
+        await asyncio.sleep(1)
+        
+        # Permanently delete the group
+        try:
+            await user_client.delete_supergroup(target_chat_id)
+            print(f"✅ Permanently deleted group {chat.id}")
+        except Exception as e:
+            print(f"❌ Failed to delete group with delete_supergroup: {e}")
+            try:
+                await user_client.delete_chat(target_chat_id)
+                print(f"✅ Permanently deleted group {chat.id} using delete_chat")
+            except Exception as e2:
+                print(f"❌ Failed to delete group with delete_chat: {e2}")
+                try:
+                    await update.message.reply_text(
+                        f"<b>❌ Failed to delete group: {str(e)}</b>\n\n"
+                        "<b>Note:</b> The userbot may not have permission to delete this group. "
+                        "Only the group creator can delete a supergroup.",
+                        parse_mode='HTML'
+                    )
+                except:
+                    pass
+                return
+        
+        print(f"✅ CEO {user.id} cleared (deleted) group {chat.id}")
+        
     except Exception as e:
-        print(f"❌ Failed to transfer ownership/leave group {chat.id}: {e}")
+        print(f"❌ Failed to clear group {chat.id}: {e}")
         try:
             await update.message.reply_text(
-                f"<b>❌ Failed to transfer ownership: {str(e)}</b>\n\n"
-                "<b>Note:</b> The bot may not have permission to transfer ownership.",
+                f"<b>❌ Failed to delete group: {str(e)}</b>",
                 parse_mode='HTML'
             )
         except:
@@ -2462,13 +5079,33 @@ async def leave_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /release command - only seller in P2P or buyer in OTC can release funds"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     user = update.effective_user
     chat = update.effective_chat
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Only works in groups
     if chat.type not in ['group', 'supergroup']:
         await update.message.reply_text(
             "<b>⚠️ This command can only be used in escrow groups.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if deal is already complete
+    if chat.id in escrow_roles and escrow_roles[chat.id].get('deal_complete', False):
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
             parse_mode='HTML'
         )
         return
@@ -2523,23 +5160,165 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # TODO: Implement actual fund release logic here
+    # Get amount
     amount = context.args[0]
-    await update.message.reply_text(
-        f"<b>✅ Release command received for amount: {amount}</b>\n\n"
-        "<b>Note:</b> Fund release functionality will be implemented soon.",
-        parse_mode='HTML'
+    
+    # Get token and network info
+    token_info = escrow_roles[chat.id].get('token', 'USDT')
+    if isinstance(token_info, dict):
+        token_name = token_info.get('name', 'USDT')
+        network_name = token_info.get('network', 'BSC')
+    else:
+        token_name = token_info
+        network_name = escrow_roles[chat.id].get('network', 'BSC')
+    
+    # Get buyer username and address
+    buyer_username = buyer_info.get('username', 'Unknown')
+    buyer_address = buyer_info.get('address', 'N/A')
+    
+    # Get escrow balance for "all" calculation
+    escrow_address = escrow_roles[chat.id].get('escrow_address', '')
+    monitored_balance = 0
+    manual_balance = 0
+    
+    if escrow_address and escrow_address.lower() in monitored_addresses:
+        monitored_balance = monitored_addresses[escrow_address.lower()].get('total_balance', 0)
+    
+    if chat.id in escrow_roles:
+        manual_balance = escrow_roles[chat.id].get('balance', 0)
+    
+    current_escrow_balance = monitored_balance + manual_balance
+    
+    # Calculate fees (1% escrow fee)
+    try:
+        if amount.lower() == 'all':
+            release_amount = current_escrow_balance
+            amount_for_calc = current_escrow_balance
+        else:
+            release_amount = amount
+            amount_for_calc = float(amount)
+    except:
+        release_amount = amount
+        amount_for_calc = 0
+    
+    # Check if both users have bot in bio for 0.5% fee
+    buyer_has_bio = buyer_info.get('has_bot_in_bio', False)
+    seller_has_bio = seller_info.get('has_bot_in_bio', False)
+    both_have_bio = buyer_has_bio and seller_has_bio
+    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
+    
+    # Format amounts with $ symbol and proper decimals
+    if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
+        network_fee = 0.10
+        escrow_fee = amount_for_calc * escrow_fee_percent
+        ambassador_discount = 0.0
+        ticket_discount = 0.0
+        formatted_amount = f"{amount_for_calc:.5f}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = f"{escrow_fee:.5f}"
+        formatted_ambassador = "0.00"
+        formatted_ticket = f"{ticket_discount:.5f}"
+    else:
+        formatted_amount = f"{release_amount}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = "0.15000"
+        formatted_ambassador = "0.00"
+        formatted_ticket = "0.00000"
+    
+    # Create confirmation message
+    buyer_name_clean = buyer_username.lstrip('@') if buyer_username.startswith('@') else buyer_username
+    confirmation_message = f"""‼️<b>Release Confirmation</b>‼️
+
+🔒 <b>Paying To: Buyer[<u>@{buyer_name_clean}</u>]</b>
+💰 <b>Amount:</b> {formatted_amount} ({formatted_amount}$)
+🌐 <b>Network Fee:</b> {formatted_network_fee} ({formatted_network_fee}$)
+💷 <b>Escrow Fee:</b> {formatted_escrow_fee} ({formatted_escrow_fee}$)
+🤝 <b>Ambassador Discounts:</b> {formatted_ambassador} ({formatted_ambassador}$)
+🎫 <b>Ticket Discount:</b> {formatted_ticket} ({formatted_ticket}$)
+
+📬 <b>Address:</b> <code>{buyer_address}</code>
+🪙 <b>Token:</b> {token_name}
+🌐 <b>Network:</b> {network_name}
+
+<u><b>(Network fee will be deducted from amount)</b></u>
+<u><b>(Escrow fee will be deducted from total balance)</b></u>
+
+<b>Are you ready to proceed with this withdrawal?</b>
+<b>Both the parties kindly confirm the same and note the action is irreversible.</b>
+
+<b>For help: Hit /dispute to call an Administrator.</b>
+
+
+"""
+    
+    # Create confirmation buttons - stacked vertically
+    keyboard = [
+        [InlineKeyboardButton("Buyer Confirmation ❌", callback_data=f"release_buyer_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Seller Confirmation ❌", callback_data=f"release_seller_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Reject ❌", callback_data=f"release_reject_{chat.id}_{amount}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Send confirmation message
+    msg = await update.message.reply_text(
+        confirmation_message,
+        parse_mode='HTML',
+        reply_markup=reply_markup
     )
+    
+    # Get seller username
+    seller_username = seller_info.get('username', 'Unknown')
+    
+    # Store release confirmation state
+    release_pending[msg.message_id] = {
+        'chat_id': chat.id,
+        'amount': amount,
+        'buyer_id': buyer_info['user_id'],
+        'seller_id': seller_info['user_id'],
+        'buyer_confirmed': False,
+        'seller_confirmed': False,
+        'token': token_name,
+        'network': network_name,
+        'buyer_username': buyer_username,
+        'seller_username': seller_username,
+        'buyer_address': buyer_address,
+        'buyer_has_bio': buyer_info.get('has_bot_in_bio', False),
+        'seller_has_bio': seller_info.get('has_bot_in_bio', False),
+        'original_message': confirmation_message
+    }
+    
+    # Update escrow log status to "Release Stage"
+    await update_escrow_log(context, chat.id, new_status="Release Stage")
 
 async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /refund command - only buyer in P2P or seller in OTC can refund funds"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
     user = update.effective_user
     chat = update.effective_chat
+    
+    # Check if used in DM - only works in groups
+    if chat.type == 'private':
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
+            parse_mode='HTML'
+        )
+        return
     
     # Only works in groups
     if chat.type not in ['group', 'supergroup']:
         await update.message.reply_text(
             "<b>⚠️ This command can only be used in escrow groups.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if deal is already complete
+    if chat.id in escrow_roles and escrow_roles[chat.id].get('deal_complete', False):
+        await update.message.reply_text(
+            "<b>Sorry! please first use /dd first!</b>",
             parse_mode='HTML'
         )
         return
@@ -2594,13 +5373,133 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # TODO: Implement actual fund refund logic here
+    # Get amount
     amount = context.args[0]
-    await update.message.reply_text(
-        f"<b>✅ Refund command received for amount: {amount}</b>\n\n"
-        "<b>Note:</b> Fund refund functionality will be implemented soon.",
-        parse_mode='HTML'
+    
+    # Get token and network info
+    token_info = escrow_roles[chat.id].get('token', 'USDT')
+    if isinstance(token_info, dict):
+        token_name = token_info.get('name', 'USDT')
+        network_name = token_info.get('network', 'BSC')
+    else:
+        token_name = token_info
+        network_name = escrow_roles[chat.id].get('network', 'BSC')
+    
+    # Get seller username and address (paying to seller in refund)
+    seller_username = seller_info.get('username', 'Unknown')
+    seller_address = seller_info.get('address', 'N/A')
+    buyer_username = buyer_info.get('username', 'Unknown')
+    
+    # Get escrow balance
+    escrow_address = escrow_roles[chat.id].get('escrow_address', '')
+    monitored_balance = 0
+    manual_balance = 0
+    
+    if escrow_address and escrow_address.lower() in monitored_addresses:
+        monitored_balance = monitored_addresses[escrow_address.lower()].get('total_balance', 0)
+    
+    if chat.id in escrow_roles:
+        manual_balance = escrow_roles[chat.id].get('balance', 0)
+    
+    current_escrow_balance = monitored_balance + manual_balance
+    
+    # Calculate amounts
+    try:
+        if amount.lower() == 'all':
+            refund_amount = current_escrow_balance
+            amount_for_calc = current_escrow_balance
+        else:
+            refund_amount = amount
+            amount_for_calc = float(amount)
+    except:
+        refund_amount = amount
+        amount_for_calc = 0
+    
+    # Check if both users have bot in bio for 0.5% fee
+    buyer_has_bio = buyer_info.get('has_bot_in_bio', False)
+    seller_has_bio = seller_info.get('has_bot_in_bio', False)
+    both_have_bio = buyer_has_bio and seller_has_bio
+    escrow_fee_percent = get_escrow_fee_percent(both_have_bio)
+    
+    # Format amounts
+    if isinstance(amount_for_calc, (int, float)) and amount_for_calc > 0:
+        network_fee = 0.10
+        escrow_fee = amount_for_calc * escrow_fee_percent
+        ambassador_discount = 0.0
+        ticket_discount = 0.0
+        formatted_amount = f"{amount_for_calc:.5f}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = f"{escrow_fee:.5f}"
+        formatted_ambassador = "0.00"
+        formatted_ticket = f"{ticket_discount:.5f}"
+    else:
+        formatted_amount = f"{refund_amount}"
+        formatted_network_fee = "0.10"
+        formatted_escrow_fee = "0.15000"
+        formatted_ambassador = "0.00"
+        formatted_ticket = "0.00000"
+    
+    # Create refund confirmation message (paying to seller)
+    seller_name_clean = seller_username.lstrip('@') if seller_username.startswith('@') else seller_username
+    refund_message = f"""‼️<b>Refund Confirmation</b>‼️
+
+🔒 <b>Paying To: Seller[<u>@{seller_name_clean}</u>]</b>
+💰 <b>Amount:</b> {formatted_amount} ({formatted_amount}$)
+🌐 <b>Network Fee:</b> {formatted_network_fee} ({formatted_network_fee}$)
+💷 <b>Escrow Fee:</b> {formatted_escrow_fee} ({formatted_escrow_fee}$)
+🤝 <b>Ambassador Discounts:</b> {formatted_ambassador} ({formatted_ambassador}$)
+🎫 <b>Ticket Discount:</b> {formatted_ticket} ({formatted_ticket}$)
+
+📬 <b>Address:</b> <code>{seller_address}</code>
+🪙 <b>Token:</b> {token_name}
+🌐 <b>Network:</b> {network_name}
+
+<u><b>(Network fee will be deducted from amount)</b></u>
+<u><b>(Escrow fee will be deducted from total balance)</b></u>
+
+<b>Are you ready to proceed with this refund?</b>
+<b>Both the parties kindly confirm the same and note the action is irreversible.</b>
+
+<b>For help: Hit /dispute to call an Administrator.</b>
+
+
+"""
+    
+    # Create confirmation buttons
+    keyboard = [
+        [InlineKeyboardButton("Buyer Confirmation ❌", callback_data=f"refund_buyer_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Seller Confirmation ❌", callback_data=f"refund_seller_confirm_{chat.id}_{amount}")],
+        [InlineKeyboardButton("Reject ❌", callback_data=f"refund_reject_{chat.id}_{amount}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Send confirmation message
+    msg = await update.message.reply_text(
+        refund_message,
+        parse_mode='HTML',
+        reply_markup=reply_markup
     )
+    
+    # Store refund confirmation state
+    refund_pending[msg.message_id] = {
+        'chat_id': chat.id,
+        'amount': amount,
+        'buyer_id': buyer_info['user_id'],
+        'seller_id': seller_info['user_id'],
+        'buyer_confirmed': False,
+        'seller_confirmed': False,
+        'token': token_name,
+        'network': network_name,
+        'buyer_username': buyer_username,
+        'seller_username': seller_username,
+        'seller_address': seller_address,
+        'buyer_has_bio': buyer_info.get('has_bot_in_bio', False),
+        'seller_has_bio': seller_info.get('has_bot_in_bio', False),
+        'original_message': refund_message
+    }
+    
+    # Update escrow log status to "Refund Stage"
+    await update_escrow_log(context, chat.id, new_status="Refund Stage")
 
 async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /verify command to check if an address belongs to the bot"""
@@ -2618,68 +5517,1268 @@ async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # All bot deposit addresses (in lowercase for case-insensitive comparison)
     bot_addresses = {
         # USDT BSC
-        "0xda4c2a5b876b0c7521e1c752690d8705080000fe",
+        "0xa3d0e7da537057cbec62a48235fbec8bb38b4e08",
         "0xf282e789e835ed379aea84ece204d2d643e6774f",
         # USDT TRON
-        "tvstywseydrxukk2ehcectt4uu3b2tqrvm",
+        "tdayz8pb1mnfxpywhdgrhwa3zkwwxb3wdr",
         "txfytrl3vau3dje6kyxqueazoscn8drrhb",
         # BTC
-        "bc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcyflnak",
+        "bc1qak4axkk5qw6046p7yl9qxlvtuqq6dm74557ewn",
         "bc1q43nwc38ashvvzhakw7ma7227yzd3yfkmpudl48",
         # LTC
-        "ltc1qya2u04hfdy5j9mnzds7effh0xqx3mvwcq49h9x",
+        "ltc1qmh7cv6n9u8rpwlch8w2nr9tdl94y35gx90edjz",
         "ltc1qfu7asf36pmg5kc4wge5dcz6t5yd3pyn3d86w66",
         # Fake deposit addresses (for testing)
-        "thb2do8gmweboctgaduh73q6ewxfcx9vx4"  # TRC20 test address
+        "thb2do8gmweboctgaduh73q6ewxfcx9vx4",  # TRC20 test address
+        "0x4de23f3f0fb3318287378abdde030cf61714b2f3"  # BEP20 test address
     }
     
-    # Check if the provided address matches any bot address (case-insensitive)
-    if provided_address.lower() in bot_addresses:
-        await update.message.reply_text(
-            "<b>The provided adress is valid and belongs to bot.</b>",
-            parse_mode='HTML'
-        )
+    # Also treat any address currently assigned to a deal (e.g. via /manual or
+    # /setaddy) or being monitored as a valid bot address
+    dynamic_addresses = set()
+    for roles in escrow_roles.values():
+        assigned_address = roles.get('escrow_address')
+        if assigned_address:
+            dynamic_addresses.add(assigned_address.lower())
+    for monitored_address in monitored_addresses:
+        dynamic_addresses.add(monitored_address.lower())
+
+    all_valid_addresses = {addr.lower() for addr in bot_addresses} | dynamic_addresses
+
+    # Check if the provided address matches any known address (case-insensitive)
+    if provided_address.lower() in all_valid_addresses:
+        # Find which deal this address is assigned to
+        deal_chat_id = None
+        
+        # Strategy 1: Check if the user who sent the command is buyer/seller in any deal
+        user_id = update.effective_user.id
+        for chat_id, roles in escrow_roles.items():
+            buyer = roles.get('buyer')
+            seller = roles.get('seller')
+            if buyer and buyer.get('user_id') == user_id:
+                if roles.get('escrow_address', '').lower() == provided_address.lower():
+                    deal_chat_id = chat_id
+                    break
+            if seller and seller.get('user_id') == user_id:
+                if roles.get('escrow_address', '').lower() == provided_address.lower():
+                    deal_chat_id = chat_id
+                    break
+        
+        # Strategy 2: Search all escrow_roles for matching escrow_address
+        if not deal_chat_id:
+            for chat_id, roles in escrow_roles.items():
+                if roles.get('escrow_address', '').lower() == provided_address.lower():
+                    deal_chat_id = chat_id
+                    break
+        
+        # Strategy 3: Check monitored_addresses
+        if not deal_chat_id:
+            if provided_address.lower() in {addr.lower(): addr for addr in monitored_addresses}:
+                for addr, info in monitored_addresses.items():
+                    if addr.lower() == provided_address.lower():
+                        deal_chat_id = info.get('chat_id')
+                        break
+        
+        if deal_chat_id and deal_chat_id in escrow_roles:
+            roles = escrow_roles[deal_chat_id]
+            buyer_info = roles.get('buyer')
+            seller_info = roles.get('seller')
+            transaction_id = roles.get('transaction_id', 'N/A')
+            
+            # Check if command was sent in the deal's escrow group
+            current_chat_id = update.effective_chat.id
+            belongs_to_this_chat = "Yes ✅" if current_chat_id == deal_chat_id else "No ❌"
+            
+            # Get buyer details and check availability
+            buyer_name = "N/A"
+            buyer_userid = "N/A"
+            buyer_available = "No"
+            if buyer_info:
+                buyer_userid = buyer_info['user_id']
+                try:
+                    member = await context.bot.get_chat_member(chat_id=deal_chat_id, user_id=buyer_userid)
+                    buyer_first_name = member.user.first_name or "Unknown"
+                    buyer_name = f'<a href="tg://user?id={buyer_userid}">{buyer_first_name}</a>'
+                    if member.status in ['member', 'administrator', 'creator']:
+                        buyer_available = "Yes"
+                    else:
+                        buyer_available = "No"
+                except Exception:
+                    buyer_name = buyer_info.get('username', 'Unknown')
+                    buyer_available = "No"
+            
+            # Get seller details and check availability (same logic)
+            seller_name = "N/A"
+            seller_userid = "N/A"
+            seller_available = "No"
+            if seller_info:
+                seller_userid = seller_info['user_id']
+                try:
+                    member = await context.bot.get_chat_member(chat_id=deal_chat_id, user_id=seller_userid)
+                    seller_first_name = member.user.first_name or "Unknown"
+                    seller_name = f'<a href="tg://user?id={seller_userid}">{seller_first_name}</a>'
+                    if member.status in ['member', 'administrator', 'creator']:
+                        seller_available = "Yes"
+                    else:
+                        seller_available = "No"
+                except Exception:
+                    seller_name = seller_info.get('username', 'Unknown')
+                    seller_available = "No"
+            
+            verify_message = (
+                f"<b>Address belongs to this chat's deal: {belongs_to_this_chat}</b>\n\n"
+                f"<b>The provided address is valid and belong to bot.</b>\n\n"
+                f"<b>Currently Assigned Deal: {transaction_id}</b>\n"
+                f"<b>Buyer: {buyer_name}({buyer_userid})</b>\n"
+                f"<b>Seller: {seller_name}({seller_userid})</b>\n"
+                f"<b>Buyer Available in Deal Chat: {buyer_available}</b>\n"
+                f"<b>Seller Available in Deal Chat: {seller_available}</b>"
+            )
+            
+            await update.message.reply_text(verify_message, parse_mode='HTML')
+        else:
+            # Address belongs to bot but no active deal found for it
+            await update.message.reply_text(
+                "<b>The provided address is valid and belong to bot.</b>\n\n"
+                "<b>No active deal is currently assigned to this address.</b>",
+                parse_mode='HTML'
+            )
     else:
+        # Address doesn't belong to bot (keep existing response)
         await update.message.reply_text(
             "<b>The provided adress is invalid and doesn't belongs to bot.</b>",
             parse_mode='HTML'
         )
 
+async def refresh_deposit_message(context, target_chat_id, new_address):
+    """Update the pinned deposit message in a group to reflect a new escrow address."""
+    roles = escrow_roles.get(target_chat_id)
+    if not roles:
+        return
+
+    deposit_message_id = roles.get('deposit_message_id')
+    if not deposit_message_id:
+        return
+
+    try:
+        buyer_info = roles.get('buyer')
+        seller_info = roles.get('seller')
+        token = roles.get('selected_token')
+        network_label = roles.get('selected_network')
+        transaction_id = roles.get('transaction_id')
+        trade_start_time = roles.get('trade_start_time')
+
+        # Get current balance
+        monitored_balance = 0
+        if new_address in monitored_addresses:
+            monitored_balance = monitored_addresses[new_address]['total_balance']
+        baseline_balance = roles.get('baseline_balance', 0)
+        deal_balance = max(0, monitored_balance - baseline_balance)
+        manual_balance = roles.get('balance', 0)
+        current_balance = deal_balance + manual_balance
+
+        # Calculate remaining time
+        last_deposit_time = roles.get('last_deposit_time')
+        if last_deposit_time:
+            time_elapsed = (datetime.now() - last_deposit_time).total_seconds() / 60
+            remaining_time = max(0, 20 - time_elapsed)
+        else:
+            remaining_time = 20.00
+
+        # Determine group type
+        try:
+            target_chat = await context.bot.get_chat(target_chat_id)
+            is_otc_group = "OTC" in target_chat.title if target_chat.title else False
+        except Exception:
+            is_otc_group = False
+
+        if not (buyer_info and seller_info):
+            return
+
+        if is_otc_group:
+            payment_instruction = f"<b>Buyer [{buyer_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+        else:
+            payment_instruction = f"<b>Seller [{seller_info['username']}] Will Pay on the Escrow Address, And Click On Check Payment.</b>"
+
+        if is_otc_group:
+            release_msg = "Will Release The Funds To <b><u>Seller</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Buyer</u></b>."
+        else:
+            release_msg = "Will Release The Funds To <b><u>Buyer</u></b>."
+            refund_msg = "Will Refund The Funds To <b><u>Seller</u></b>."
+
+        deposit_message_text = f"""📍 <b>TRANSACTION INFORMATION [{transaction_id}]</b>
+
+⚡️ <b>SELLER</b>
+{seller_info['username']} | [{seller_info['user_id']}]
+⚡️ <b>BUYER</b>
+{buyer_info['username']} | [{buyer_info['user_id']}]
+🟢 <b>ESCROW ADDRESS</b>
+<code>{new_address}</code> <b>[{token}] [{network_label}]</b>
+
+{payment_instruction}
+
+Amount Recieved: <code>{current_balance:.5f}</code> <b><u>[{current_balance:.2f}$]</u></b>
+
+⏰ <b>Trade Start Time: {trade_start_time}</b>
+⏰ <b>Address Reset In: {remaining_time:.2f} Min</b>
+
+📄 <b>Note: Address will reset after the given time, so make sure to deposit in the bot before the address exprires.</b>
+<b>Useful commands:</b>
+🗒 <code>/release</code> = {release_msg}
+🗒 <code>/refund</code> = {refund_msg}
+
+<b>Remember, once commands are used payment will be released, there is no revert!</b>"""
+
+        keyboard = [[InlineKeyboardButton("Check Payment", callback_data="check_payment_deposit")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await context.bot.edit_message_text(
+            chat_id=target_chat_id,
+            message_id=deposit_message_id,
+            text=deposit_message_text,
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        print(f"Warning: Could not update deposit message in group {target_chat_id}: {e}")
+
+
+def _username_display(user):
+    """Return @username if available, otherwise the user's full name."""
+    if user is None:
+        return "Unknown"
+    if getattr(user, 'username', None):
+        return f"@{user.username}"
+    return user.full_name or "Unknown"
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /stats command - anyone can view their own stats."""
+    user = update.effective_user
+    message = format_stats_message(user.id, _username_display(user))
+    keyboard = [[
+        InlineKeyboardButton("Yesterday", callback_data="stats_yesterday"),
+        InlineKeyboardButton("Last 30 Days", callback_data="stats_last30"),
+    ]]
+    await update.message.reply_text(
+        message,
+        parse_mode='HTML',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def clonestats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /clonestats command - admins only, clone a pasted stats block onto a target user.
+
+    Target resolution: reply to a message, or /clonestats @username, or /clonestats <user_id>,
+    or /clonestats alone to target the admin themselves.
+    """
+    user = update.effective_user
+
+    if user.id not in ADMIN_IDS:
+        return  # Silent fail for non-authorized users
+
+    target_user_id = None
+    target_display = None
+
+    # 1) Reply to a message
+    if update.message.reply_to_message and update.message.reply_to_message.from_user:
+        target = update.message.reply_to_message.from_user
+        target_user_id = target.id
+        target_display = _username_display(target)
+    # 2) Argument: @username or numeric id
+    elif context.args:
+        arg = context.args[0].strip()
+        if arg.startswith('@'):
+            try:
+                chat = await context.bot.get_chat(arg)
+                target_user_id = chat.id
+                target_display = _username_display(chat)
+            except Exception:
+                await update.message.reply_text(
+                    "<b>Could not find that username. Have them message the bot first, or use their numeric ID.</b>",
+                    parse_mode='HTML'
+                )
+                return
+        else:
+            try:
+                target_user_id = int(arg)
+                target_display = f"[{target_user_id}]"
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>Invalid target. Use /clonestats @username, /clonestats &lt;user_id&gt;, reply to a user, or /clonestats alone for yourself.</b>",
+                    parse_mode='HTML'
+                )
+                return
+    # 3) No target -> self
+    else:
+        target_user_id = user.id
+        target_display = _username_display(user)
+
+    awaiting_clonestats[user.id] = target_user_id
+
+    await update.message.reply_text(
+        f"<b>Cloning stats to:</b> {html.escape(target_display)} <code>[{target_user_id}]</code>\n\n"
+        f"<b>Now send the formatted stats block with the values to clone.</b>",
+        parse_mode='HTML'
+    )
+
+
+async def manual_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /manual [chat id] command - admins only, manually set an escrow address for a chat."""
+    user = update.effective_user
+
+    # Restricted to admins
+    if user.id not in ADMIN_IDS:
+        return  # Silent fail for non-authorized users
+
+    # Check if chat_id was provided
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "<b>Please use the proper format.\n\nEx:</b> /manual [chat_id]",
+            parse_mode='HTML'
+        )
+        return
+
+    try:
+        target_chat_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text(
+            "<b>Invalid chat ID. Please provide a valid numeric chat ID.</b>",
+            parse_mode='HTML'
+        )
+        return
+
+    current_address = escrow_roles.get(target_chat_id, {}).get('escrow_address', 'Not set')
+
+    # Remember which chat this admin is setting an address for
+    awaiting_manual_address[user.id] = target_chat_id
+
+    await update.message.reply_text(
+        f"<b>Manually set escrow address for chat:</b> <code>{target_chat_id}</code>\n"
+        f"<b>Current address:</b> <code>{current_address}</code>\n\n"
+        f"<b>Please send the address to set for deposit on this chat.</b>",
+        parse_mode='HTML'
+    )
+
+
+async def setaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /setaddy command - CEO only, set escrow address for a specific chat"""
+    user = update.effective_user
+    
+    # Check if user is CEO
+    if user.id != CEO_ID:
+        return  # Silent fail for non-authorized users
+    
+    # Check if chat_id was provided
+    if not context.args or len(context.args) < 1:
+        await update.message.reply_text(
+            "<b>Please use the proper format.\n\nEx:</b> /setaddy [chat_id]",
+            parse_mode='HTML'
+        )
+        return
+    
+    try:
+        target_chat_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text(
+            "<b>Invalid chat ID. Please provide a valid numeric chat ID.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if the target chat has an active deal
+    if target_chat_id not in escrow_roles:
+        await update.message.reply_text(
+            "<b>No active deal found for this chat ID.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Auto-detect network from deal's selected token/network
+    roles = escrow_roles[target_chat_id]
+    network = roles.get('selected_network')
+    token = roles.get('selected_token')
+    
+    if not network:
+        await update.message.reply_text(
+            "<b>No token/network has been selected for this deal yet.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check if network has configured addresses
+    amit_addr = escrow_addresses.get("amit", {}).get(network)
+    suraj_addr = escrow_addresses.get("suraj", {}).get(network)
+    
+    if not amit_addr or not suraj_addr:
+        await update.message.reply_text(
+            f"<b>No address configured for network: {network}</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    current_address = roles.get('escrow_address', 'Not set')
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("Amit", callback_data=f"setaddy_{target_chat_id}_amit"),
+            InlineKeyboardButton("Suraj", callback_data=f"setaddy_{target_chat_id}_suraj"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"<b>Set escrow address for chat:</b> <code>{target_chat_id}</code>\n"
+        f"<b>Token:</b> {token} | <b>Network:</b> {network}\n"
+        f"<b>Current address:</b> <code>{current_address}</code>\n\n"
+        f"<b>Select the address owner:</b>",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
+async def changeaddy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /changeaddy command - CEO only, change bot's escrow addresses"""
+    user = update.effective_user
+    
+    if user.id != CEO_ID:
+        return
+    
+    # Step 1: Ask which owner's address to change
+    keyboard = [
+        [
+            InlineKeyboardButton("Amit", callback_data="changeaddy_owner_amit"),
+            InlineKeyboardButton("Suraj", callback_data="changeaddy_owner_suraj"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "<b>Change Escrow Address</b>\n\n"
+        "<b>Select whose address you want to change:</b>",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
+async def id_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /id command - shows the chat ID"""
+    chat = update.effective_chat
+    await update.message.reply_text(
+        f"Chat id : <code>{chat.id}</code>",
+        parse_mode='HTML'
+    )
+
+async def mystats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /mystats command - show user's deal stats with option to increase.
+    Admins can use /mystats @username or /mystats user_id to view/increase another user's stats."""
+    if await check_blacklist(update, context):
+        return
+    
+    user = update.effective_user
+    is_admin = user.id in ADMIN_IDS
+    
+    # Check if admin is querying another user's stats
+    target_user_id = None
+    target_display = None
+    if context.args and len(context.args) >= 1 and is_admin:
+        target_arg = context.args[0].strip()
+        if target_arg.startswith("@"):
+            # Resolve username to user_id
+            try:
+                username_clean = target_arg.lstrip("@")
+                if user_client:
+                    if not user_client.is_connected:
+                        await user_client.start()
+                    resolved = await user_client.get_users(username_clean)
+                    target_user_id = resolved.id
+                    target_display = target_arg
+            except Exception as e:
+                await update.message.reply_text(
+                    f"<b>Could not resolve user {target_arg}</b>",
+                    parse_mode='HTML'
+                )
+                return
+        else:
+            try:
+                target_user_id = int(target_arg)
+                try:
+                    cp_chat = await context.bot.get_chat(target_user_id)
+                    target_display = f"@{cp_chat.username}" if cp_chat.username else cp_chat.first_name
+                except Exception:
+                    target_display = str(target_user_id)
+            except ValueError:
+                await update.message.reply_text(
+                    "<b>Invalid format. Use:</b> /mystats @username <b>or</b> /mystats [user_id]",
+                    parse_mode='HTML'
+                )
+                return
+    
+    if target_user_id:
+        # Admin viewing another user's stats
+        current_stats = user_deal_stats.get(target_user_id, 0.0)
+        keyboard = [
+            [InlineKeyboardButton("Increase", callback_data=f"mystats_increase_{target_user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"<b>Deal Stats for {target_display}</b>\n\n"
+            f"<b>User ID:</b> <code>{target_user_id}</code>\n"
+            f"<b>Lifetime Volume:</b> ${current_stats:.2f}",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+    else:
+        # User viewing own stats
+        current_stats = user_deal_stats.get(user.id, 0.0)
+        keyboard = [
+            [InlineKeyboardButton("Increase", callback_data="mystats_increase")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"<b>Your Deal Stats</b>\n\n"
+            f"<b>Lifetime Volume:</b> ${current_stats:.2f}",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+
+async def save_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /save command - save user's crypto address for a specific chain"""
+    # Check if user is blacklisted
+    if await check_blacklist(update, context):
+        return
+    
+    user = update.effective_user
+    user_id = user.id
+    
+    # Check if address is provided
+    if not context.args or len(context.args) == 0:
+        await update.message.reply_text(
+            "<b>Sorry! please add address after the command!</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Get the address from arguments
+    address = " ".join(context.args)
+    
+    # Store pending save operation
+    save_pending[user_id] = address
+    
+    # Show chain selection buttons
+    keyboard = [
+        [InlineKeyboardButton("BSC", callback_data=f"save_chain_bsc_{user_id}"),
+         InlineKeyboardButton("TRON", callback_data=f"save_chain_tron_{user_id}")],
+        [InlineKeyboardButton("BTC", callback_data=f"save_chain_btc_{user_id}"),
+         InlineKeyboardButton("LTC", callback_data=f"save_chain_ltc_{user_id}")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        f"<b>Please select the chain for the below address</b>\n"
+        f"<b>Address:</b> <code>{address}</code>",
+        parse_mode='HTML',
+        reply_markup=reply_markup
+    )
+
+async def globalfee_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /globalfee command - set global escrow fee (CEO/OWNER only)"""
+    global global_fee_percent
+    user = update.effective_user
+    
+    print(f"🔍 /globalfee called by user {user.id if user else 'None'}, CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID}")
+    
+    # Check if user is CEO or OWNER
+    if user.id not in [CEO_ID, OWNER_ID]:
+        print(f"❌ /globalfee: User {user.id} not authorized (CEO_ID={CEO_ID}, OWNER_ID={OWNER_ID})")
+        return  # Silent fail for non-authorized users
+    
+    print(f"✅ /globalfee: User {user.id} authorized, processing command...")
+    
+    # Check if fee percentage is provided
+    if not context.args:
+        # Show current fee
+        if global_fee_percent is not None:
+            current_fee = global_fee_percent * 100
+            await update.message.reply_text(
+                f"<b>Current Global Fee:</b> {current_fee}%\n\n"
+                f"<b>Usage:</b> <code>/globalfee 0.5%</code> to set fee to 0.5%",
+                parse_mode='HTML'
+            )
+        else:
+            await update.message.reply_text(
+                "<b>Current Global Fee:</b> Default (0.5% with bio, 1% without)\n\n"
+                "<b>Usage:</b> <code>/globalfee 0.5%</code> to set fee to 0.5%",
+                parse_mode='HTML'
+            )
+        return
+    
+    # Parse the fee percentage
+    fee_str = context.args[0].replace('%', '').strip()
+    try:
+        fee_value = float(fee_str)
+        if fee_value < 0 or fee_value > 100:
+            await update.message.reply_text(
+                "<b>Invalid fee percentage. Must be between 0 and 100.</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Convert to decimal (e.g., 0.5% -> 0.005)
+        global_fee_percent = fee_value / 100
+        save_global_fee()
+        
+        await update.message.reply_text(
+            f"<b>Global Escrow Fee Updated!</b>\n\n"
+            f"<b>New Fee:</b> {fee_value}%\n"
+            f"<b>Note:</b> This fee applies to all future escrows where both users have bot in bio.",
+            parse_mode='HTML'
+        )
+        print(f"✅ Global fee updated to {fee_value}% by user {user.id}")
+        
+    except ValueError:
+        await update.message.reply_text(
+            "<b>Invalid fee format. Use: /globalfee 0.5%</b>",
+            parse_mode='HTML'
+        )
+
+async def empty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /empty command - delete ALL groups/channels the userbot is in (CEO/OWNER only)"""
+    global user_client, escrow_roles, monitored_addresses
+    user = update.effective_user
+    
+    # Check if user is CEO or OWNER
+    if user.id not in [CEO_ID, OWNER_ID]:
+        return  # Silent fail for non-authorized users
+    
+    # Ensure userbot is connected first to count groups
+    try:
+        if not user_client:
+            user_client = Client(
+                "escrow_user_session",
+                api_id=API_ID,
+                api_hash=API_HASH,
+                phone_number=PHONE
+            )
+        
+        if not user_client.is_connected:
+            await user_client.start()
+    except Exception as e:
+        await update.message.reply_text(
+            f"<b>❌ Failed to connect userbot: {str(e)}</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    # Check for confirmation (via button callback or command argument)
+    is_confirmed = context.args and context.args[0].upper() == 'CONFIRM'
+    
+    if not is_confirmed:
+        # Count ALL groups/channels the userbot is in
+        counting_msg = await update.message.reply_text(
+            "<b>🔍 Counting all groups the userbot is in...</b>",
+            parse_mode='HTML'
+        )
+        
+        group_count = 0
+        try:
+            async for dialog in user_client.get_dialogs():
+                if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                    group_count += 1
+        except Exception as e:
+            await counting_msg.edit_text(
+                f"<b>❌ Failed to count groups: {str(e)}</b>",
+                parse_mode='HTML'
+            )
+            return
+        
+        # Create Confirm and Decline buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data="empty_confirm"),
+                InlineKeyboardButton("❌ Decline", callback_data="empty_decline")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await counting_msg.edit_text(
+            f"<b>⚠️ WARNING: This will delete ALL {group_count} groups the userbot is in!</b>\n\n"
+            f"<b>This action cannot be undone!</b>",
+            parse_mode='HTML',
+            reply_markup=reply_markup
+        )
+        return
+    
+    # Send initial status message
+    status_msg = await update.message.reply_text(
+        "<b>🔍 Fetching all groups...</b>",
+        parse_mode='HTML'
+    )
+    
+    # Get ALL groups/channels the userbot is in
+    chat_ids = []
+    try:
+        async for dialog in user_client.get_dialogs():
+            if dialog.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+                chat_ids.append(dialog.chat.id)
+    except Exception as e:
+        await status_msg.edit_text(
+            f"<b>❌ Failed to fetch groups: {str(e)}</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    if not chat_ids:
+        await status_msg.edit_text(
+            "<b>No groups found.</b>",
+            parse_mode='HTML'
+        )
+        return
+    
+    await status_msg.edit_text(
+        f"<b>🗑️ Deleting {len(chat_ids)} groups...</b>\n\n"
+        f"<b>Progress:</b> 0/{len(chat_ids)}",
+        parse_mode='HTML'
+    )
+    
+    deleted_count = 0
+    failed_count = 0
+    left_count = 0
+    failed_chats = []
+    
+    for i, chat_id in enumerate(chat_ids):
+        try:
+            # Try to delete the group using userbot
+            await user_client.delete_supergroup(chat_id)
+            deleted_count += 1
+            
+            # Remove from escrow_roles if exists
+            if chat_id in escrow_roles:
+                del escrow_roles[chat_id]
+            
+            # Remove from monitored_addresses
+            addresses_to_remove = [addr for addr, info in monitored_addresses.items() if info.get('chat_id') == chat_id]
+            for addr in addresses_to_remove:
+                del monitored_addresses[addr]
+            
+            print(f"✅ Deleted group {chat_id}")
+            
+        except FloodWait as e:
+            # Handle rate limiting
+            print(f"⏳ FloodWait: waiting {e.value} seconds...")
+            await asyncio.sleep(e.value)
+            try:
+                await user_client.delete_supergroup(chat_id)
+                deleted_count += 1
+                if chat_id in escrow_roles:
+                    del escrow_roles[chat_id]
+            except Exception as e2:
+                # If delete fails, try to leave the group instead
+                try:
+                    await user_client.leave_chat(chat_id)
+                    left_count += 1
+                    print(f"👋 Left group {chat_id} (couldn't delete)")
+                except Exception as e3:
+                    failed_count += 1
+                    failed_chats.append(chat_id)
+                    print(f"❌ Failed to delete/leave group {chat_id}: {e3}")
+                
+        except Exception as e:
+            # If delete fails, try to leave the group instead
+            try:
+                await user_client.leave_chat(chat_id)
+                left_count += 1
+                if chat_id in escrow_roles:
+                    del escrow_roles[chat_id]
+                print(f"👋 Left group {chat_id} (couldn't delete: {e})")
+            except Exception as e2:
+                failed_count += 1
+                failed_chats.append(chat_id)
+                print(f"❌ Failed to delete/leave group {chat_id}: {e2}")
+        
+        # Update progress every 5 groups
+        if (i + 1) % 5 == 0 or i == len(chat_ids) - 1:
+            try:
+                await status_msg.edit_text(
+                    f"<b>🗑️ Deleting groups...</b>\n\n"
+                    f"<b>Progress:</b> {i + 1}/{len(chat_ids)}\n"
+                    f"<b>Deleted:</b> {deleted_count}\n"
+                    f"<b>Left:</b> {left_count}\n"
+                    f"<b>Failed:</b> {failed_count}",
+                    parse_mode='HTML'
+                )
+            except:
+                pass
+        
+        # Small delay to avoid rate limiting
+        await asyncio.sleep(0.5)
+    
+    # Final status
+    result_msg = f"<b>🗑️ Empty Complete!</b>\n\n"
+    result_msg += f"<b>Total Groups:</b> {len(chat_ids)}\n"
+    result_msg += f"<b>Deleted:</b> {deleted_count}\n"
+    result_msg += f"<b>Left:</b> {left_count}\n"
+    result_msg += f"<b>Failed:</b> {failed_count}"
+    
+    if failed_chats:
+        result_msg += f"\n\n<b>Failed Chat IDs:</b>\n"
+        for chat_id in failed_chats[:10]:  # Show first 10
+            result_msg += f"<code>{chat_id}</code>\n"
+        if len(failed_chats) > 10:
+            result_msg += f"... and {len(failed_chats) - 10} more"
+    
+    await status_msg.edit_text(result_msg, parse_mode='HTML')
+    print(f"✅ Empty command completed by {user.id}: {deleted_count} deleted, {left_count} left, {failed_count} failed")
+
+async def delete_service_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Auto-delete 'X added Y' / join / leave service messages in escrow groups."""
+    if not update.message:
+        return
+    try:
+        await update.message.delete()
+    except Exception as e:
+        print(f"Could not delete service message in chat {update.effective_chat.id}: {e}")
+
+
+async def handle_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle join requests for direct escrow groups - only approve initiator and counterparty"""
+    join_request = update.chat_join_request
+    chat_id = join_request.chat.id
+    user_id = join_request.from_user.id
+    
+    # Check if this chat has a pending direct escrow
+    pending = direct_escrow_pending.get(chat_id)
+    if not pending:
+        return
+    
+    initiator_id = pending.get('initiator_id')
+    counterparty_id = pending.get('counterparty_id')
+    
+    # Approve only initiator or counterparty
+    if user_id in (initiator_id, counterparty_id):
+        try:
+            await join_request.approve()
+            print(f"✅ Approved join request from user {user_id} in chat {chat_id}")
+            
+            # Track who joined
+            pending['joined'].add(user_id)
+            
+            # Check if both have joined
+            both_joined = initiator_id in pending['joined'] and counterparty_id in pending['joined']
+            if both_joined:
+                # Edit the invite message to show trade started
+                initiator_username = pending['initiator_username']
+                counterparty_username = pending['counterparty_username']
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=pending['invite_chat_id'],
+                        message_id=pending['invite_message_id'],
+                        text=f"<b>✅ Trade Started between {initiator_username} and {counterparty_username}</b>",
+                        parse_mode='HTML'
+                    )
+                except Exception as e:
+                    print(f"Failed to edit invite message: {e}")
+        except Exception as e:
+            print(f"❌ Failed to approve join request from user {user_id}: {e}")
+    else:
+        try:
+            await join_request.decline()
+            print(f"❌ Declined join request from user {user_id} in chat {chat_id} (not authorized)")
+        except Exception as e:
+            print(f"❌ Failed to decline join request from user {user_id}: {e}")
+
 async def track_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Track when members join and auto-promote admins"""
+    """Track when members join and auto-promote admins using userbot"""
+    global user_client
     result = update.chat_member
     
-    # Check if this is a new member joining (status changed from non-member to member)
-    was_member = result.old_chat_member.status in ['member', 'administrator', 'creator']
-    is_member = result.new_chat_member.status in ['member', 'administrator', 'creator']
+    user_id = result.new_chat_member.user.id
+    chat_id = result.chat.id
+    old_status = result.old_chat_member.status
+    new_status = result.new_chat_member.status
     
-    # Only process if someone just joined
+    print(f"📥 Chat member update: user {user_id} in chat {chat_id}: {old_status} -> {new_status}")
+    
+    # Check if this is a new member joining (status changed from non-member to member)
+    # Include 'restricted' status as it can be a transition state
+    was_member = old_status in ['member', 'administrator', 'creator', 'restricted']
+    is_member = new_status in ['member', 'administrator', 'creator', 'restricted']
+    
+    # Only process if someone just joined (was not a member, now is a member)
     if not was_member and is_member:
-        user_id = result.new_chat_member.user.id
-        chat_id = result.chat.id
+        print(f"👤 New member detected: {user_id} in chat {chat_id}")
+        
+        # Track direct escrow joins (backup for join request handler)
+        if chat_id in direct_escrow_pending:
+            pending = direct_escrow_pending[chat_id]
+            initiator_id = pending.get('initiator_id')
+            counterparty_id = pending.get('counterparty_id')
+            if user_id in (initiator_id, counterparty_id):
+                pending['joined'].add(user_id)
+                both_joined = initiator_id in pending['joined'] and counterparty_id in pending['joined']
+                if both_joined:
+                    initiator_username = pending['initiator_username']
+                    counterparty_username = pending['counterparty_username']
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=pending['invite_chat_id'],
+                            message_id=pending['invite_message_id'],
+                            text=f"<b>✅ Trade Started between {initiator_username} and {counterparty_username}</b>",
+                            parse_mode='HTML'
+                        )
+                    except Exception as e:
+                        print(f"Failed to edit invite message from track_chat_members: {e}")
         
         # Check if the user is in the admin list
-        if user_id in ADMIN_IDS:
+        # But skip if it's the userbot itself (to preserve its anonymous admin status)
+        userbot_id = None
+        if user_client and user_client.is_connected:
             try:
-                # Promote the admin with full permissions
-                await context.bot.promote_chat_member(
-                    chat_id=chat_id,
-                    user_id=user_id,
-                    can_manage_chat=True,
-                    can_delete_messages=True,
-                    can_manage_video_chats=True,
-                    can_restrict_members=True,
-                    can_promote_members=True,
-                    can_change_info=True,
-                    can_invite_users=True,
-                    can_pin_messages=True,
-                    can_post_messages=True
+                me = await user_client.get_me()
+                userbot_id = me.id
+            except:
+                pass
+        
+        if user_id == userbot_id:
+            print(f"⏭️  Skipping auto-promotion for userbot {user_id} (already anonymous admin)")
+            return
+        
+        if user_id in DISPUTE_ADMIN_IDS:
+            print(f"🔑 User {user_id} is in DISPUTE_ADMIN_IDS, attempting promotion...")
+            
+            # Ensure userbot is connected
+            if not user_client:
+                user_client = Client(
+                    "escrow_user_session",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    phone_number=PHONE
                 )
-                print(f"✅ Auto-promoted admin {user_id} in chat {chat_id}")
-            except Exception as e:
-                print(f"Failed to promote admin {user_id}: {e}")
+            
+            if not user_client.is_connected:
+                await user_client.start()
+            
+            # Wait a bit for Telegram to propagate the join event
+            await asyncio.sleep(2)
+            
+            # Retry loop with delay for peer resolution
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    if attempt > 0:
+                        await asyncio.sleep(2)
+                    
+                    print(f"  Attempt {attempt + 1}: Resolving peers via get_chat_members...")
+                    
+                    # First check if userbot is in this chat
+                    try:
+                        me = await user_client.get_me()
+                        await user_client.get_chat(chat_id)
+                        print(f"  Chat {chat_id} resolved successfully")
+                    except Exception as e:
+                        print(f"  Warning: Could not resolve chat: {e}")
+                        continue
+                    
+                    # Iterate through chat members to find and hydrate the user peer
+                    user_found = False
+                    try:
+                        async for member in user_client.get_chat_members(chat_id, limit=100):
+                            if member.user.id == user_id:
+                                user_found = True
+                                print(f"  Found user {user_id} in chat members, peer hydrated")
+                                break
+                    except Exception as e:
+                        print(f"  Warning: Could not iterate chat members: {e}")
+                    
+                    if not user_found:
+                        print(f"  User {user_id} not found in chat members yet, retrying...")
+                        continue
+                    
+                    # Now try to promote - the peer should be hydrated
+                    print(f"  Attempt {attempt + 1}: Promoting user...")
+                    await user_client.promote_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        privileges=ChatPrivileges(
+                            can_manage_chat=True,
+                            can_delete_messages=True,
+                            can_manage_video_chats=True,
+                            can_restrict_members=True,
+                            can_promote_members=True,
+                            can_change_info=True,
+                            can_invite_users=True,
+                            can_pin_messages=True
+                        )
+                    )
+                    print(f"✅ Auto-promoted admin {user_id} in chat {chat_id} (via userbot)")
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    print(f"  Attempt {attempt + 1} failed: {e}")
+                    if attempt == max_retries - 1:
+                        print(f"❌ Failed to promote admin {user_id} after {max_retries} attempts")
+
+async def handle_deal_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle messages in groups to capture deal details (Quantity/Amount) after /dd, and stats increase input"""
+    if not update.message:
+        return
+    
+    # Handle stats increase input
+    caller_id = update.effective_user.id
+    if caller_id in awaiting_stats_increase:
+        target_user_id = awaiting_stats_increase[caller_id]
+        message_text = update.message.text or ""
+        try:
+            amount = float(message_text.strip())
+            if amount <= 0:
+                await update.message.reply_text("<b>Please enter a positive amount.</b>", parse_mode='HTML')
+                return
+            current = user_deal_stats.get(target_user_id, 0.0)
+            user_deal_stats[target_user_id] = current + amount
+            save_user_deal_stats()
+            del awaiting_stats_increase[caller_id]
+            if target_user_id == caller_id:
+                await update.message.reply_text(
+                    f"<b>Stats updated!</b>\n\n"
+                    f"<b>Added:</b> ${amount:.2f}\n"
+                    f"<b>New Lifetime Volume:</b> ${user_deal_stats[target_user_id]:.2f}",
+                    parse_mode='HTML'
+                )
+            else:
+                await update.message.reply_text(
+                    f"<b>Stats updated for user <code>{target_user_id}</code>!</b>\n\n"
+                    f"<b>Added:</b> ${amount:.2f}\n"
+                    f"<b>New Lifetime Volume:</b> ${user_deal_stats[target_user_id]:.2f}",
+                    parse_mode='HTML'
+                )
+        except ValueError:
+            await update.message.reply_text("<b>Please send a valid number.</b>", parse_mode='HTML')
+        return
+    
+    # Handle changeaddy new address input
+    if caller_id in awaiting_changeaddy:
+        pending = awaiting_changeaddy[caller_id]
+        new_address = (update.message.text or "").strip()
+        
+        if not new_address:
+            await update.message.reply_text("<b>Please send a valid address.</b>", parse_mode='HTML')
+            return
+        
+        owner = pending['owner']
+        token = pending['token']
+        network = pending['network']
+        owner_name = "Amit" if owner == "amit" else "Suraj"
+        
+        # Get old address for reference
+        old_address = escrow_addresses.get(owner, {}).get(network, "Not set")
+        
+        # Update the address
+        if owner not in escrow_addresses:
+            escrow_addresses[owner] = {}
+        escrow_addresses[owner][network] = new_address
+        save_escrow_addresses()
+        
+        del awaiting_changeaddy[caller_id]
+        
+        await update.message.reply_text(
+            f"<b>Escrow address changed successfully!</b>\n\n"
+            f"<b>Owner:</b> {owner_name}\n"
+            f"<b>Token:</b> {token}\n"
+            f"<b>Network:</b> {network}\n"
+            f"<b>Old address:</b> <code>{old_address}</code>\n"
+            f"<b>New address:</b> <code>{new_address}</code>",
+            parse_mode='HTML'
+        )
+        print(f"✅ CEO changed {owner_name}'s {network} address from {old_address} to {new_address}")
+        return
+    
+    # Handle clonestats block input (/clonestats command)
+    if caller_id in awaiting_clonestats:
+        target_user_id = awaiting_clonestats[caller_id]
+        block_text = update.message.text or update.message.caption or ""
+        parsed = parse_stats_block(block_text)
+
+        if not parsed:
+            await update.message.reply_text(
+                "<b>Could not read any stats from that message. Please send the same formatted stats block with values.</b>",
+                parse_mode='HTML'
+            )
+            return
+
+        existing = user_stats.get(target_user_id, {})
+        existing.update(parsed)
+        user_stats[target_user_id] = existing
+        save_user_stats()
+
+        del awaiting_clonestats[caller_id]
+
+        await update.message.reply_text(
+            f"<b>Stats cloned successfully to</b> <code>[{target_user_id}]</code>!\n\n"
+            f"{format_stats_message(target_user_id, f'[{target_user_id}]')}",
+            parse_mode='HTML'
+        )
+        print(f"✅ Admin {caller_id} cloned stats to user {target_user_id}: {parsed}")
+        return
+
+    # Handle manual escrow address input (/manual command)
+    if caller_id in awaiting_manual_address:
+        target_chat_id = awaiting_manual_address[caller_id]
+        new_address = (update.message.text or "").strip()
+
+        if not new_address:
+            await update.message.reply_text("<b>Please send a valid address.</b>", parse_mode='HTML')
+            return
+
+        if target_chat_id not in escrow_roles:
+            escrow_roles[target_chat_id] = {}
+
+        old_address = escrow_roles[target_chat_id].get('escrow_address')
+
+        # Set the manual escrow address for this chat
+        escrow_roles[target_chat_id]['escrow_address'] = new_address
+
+        # Transfer monitoring from old address to new address
+        if old_address and old_address in monitored_addresses:
+            monitored_addresses[new_address] = monitored_addresses.pop(old_address)
+
+        # Refresh the pinned deposit message in the target group
+        await refresh_deposit_message(context, target_chat_id, new_address)
+
+        del awaiting_manual_address[caller_id]
+
+        await update.message.reply_text(
+            f"<b>Escrow address set successfully!</b>\n\n"
+            f"<b>Chat:</b> <code>{target_chat_id}</code>\n"
+            f"<b>Old address:</b> <code>{old_address or 'Not set'}</code>\n"
+            f"<b>New address:</b> <code>{new_address}</code>",
+            parse_mode='HTML'
+        )
+        print(f"✅ Manual escrow address set for chat {target_chat_id}: {new_address}")
+        return
+    
+    chat = update.effective_chat
+    chat_id = chat.id
+    
+    # Only process if we're awaiting deal details for this chat
+    if chat_id not in awaiting_deal_details:
+        return
+    
+    # Get message text (support both text messages and captions on photos/documents)
+    message_text = update.message.text or update.message.caption
+    if not message_text:
+        return
+    
+    # Skip command messages
+    if message_text.startswith('/'):
+        return
+    
+    print(f"📝 Deal details handler triggered for chat {chat_id}, message: {message_text[:100]}...")
+    
+    is_otc = awaiting_deal_details[chat_id].get('is_otc', False)
+    deal_amount = None
+    
+    if is_otc:
+        # For OTC groups, look for "Amount" field
+        # Match patterns like "Amount - 500", "Amount: 500", "Amount — 500" (unicode dashes)
+        match = re.search(r'amount\s*[-–—:=]?\s*([^\n\r]+)', message_text, re.IGNORECASE)
+        if match:
+            deal_amount = match.group(1).strip()
+            print(f"  Found OTC Amount: {deal_amount}")
+    else:
+        # For P2P groups, look for "Quantity" field
+        # Match patterns like "Quantity - 10", "Quantity: 10", "Quantity — 10" (unicode dashes)
+        match = re.search(r'quantity\s*[-–—:=]?\s*([^\n\r]+)', message_text, re.IGNORECASE)
+        if match:
+            deal_amount = match.group(1).strip()
+            print(f"  Found P2P Quantity: {deal_amount}")
+    
+    if deal_amount:
+        # Clean up the deal amount (limit length, escape HTML)
+        deal_amount = deal_amount.strip()[:50]
+        deal_amount = html.escape(deal_amount)
+        
+        # Keep the filled form so the log's DEAL INFO button can show it
+        if chat_id in escrow_roles and 'log_data' in escrow_roles[chat_id]:
+            escrow_roles[chat_id]['log_data']['deal_details'] = message_text.strip()[:3000]
+        
+        # Update the escrow log with the deal amount
+        await update_escrow_log(context, chat_id, deal_amount=deal_amount)
+        print(f"✅ Captured deal amount for chat {chat_id}: {deal_amount}")
+        
+        # Clear the flag so we don't process more messages
+        del awaiting_deal_details[chat_id]
+    else:
+        print(f"  No quantity/amount pattern found in message")
+
+RESPONSE_DELAY_SECONDS = 1.5
+
+# Set per update: True when the update came from an admin, who gets no response delay
+skip_response_delay = contextvars.ContextVar("skip_response_delay", default=False)
+
+
+async def tag_admin_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mark updates coming from admins so their responses skip the delay."""
+    user = update.effective_user
+    skip_response_delay.set(bool(user and user.id in ADMIN_IDS))
+
+
+class DelayedBot(ExtBot):
+    """Bot that waits RESPONSE_DELAY_SECONDS before every outgoing message/edit.
+
+    This adds a delay before the first response and a matching gap between
+    consecutive messages sent by the bot. Responses to admins are not delayed.
+    """
+
+    async def _delay(self):
+        if skip_response_delay.get():
+            return
+        await asyncio.sleep(RESPONSE_DELAY_SECONDS)
+
+    async def send_message(self, *args, **kwargs):
+        await self._delay()
+        return await super().send_message(*args, **kwargs)
+
+    async def send_photo(self, *args, **kwargs):
+        await self._delay()
+        return await super().send_photo(*args, **kwargs)
+
+    async def send_document(self, *args, **kwargs):
+        await self._delay()
+        return await super().send_document(*args, **kwargs)
+
+    async def send_video(self, *args, **kwargs):
+        await self._delay()
+        return await super().send_video(*args, **kwargs)
+
+    async def send_animation(self, *args, **kwargs):
+        await self._delay()
+        return await super().send_animation(*args, **kwargs)
+
+    async def send_media_group(self, *args, **kwargs):
+        await self._delay()
+        return await super().send_media_group(*args, **kwargs)
+
+    async def copy_message(self, *args, **kwargs):
+        await self._delay()
+        return await super().copy_message(*args, **kwargs)
+
+    async def edit_message_text(self, *args, **kwargs):
+        await self._delay()
+        return await super().edit_message_text(*args, **kwargs)
+
+    async def edit_message_caption(self, *args, **kwargs):
+        await self._delay()
+        return await super().edit_message_caption(*args, **kwargs)
+
 
 def main():
+    # Load blacklist, global fee, saved addresses, and deal stats from file on startup
+    load_blacklist()
+    load_global_fee()
+    load_saved_addresses()
+    load_user_deal_stats()
+    load_user_stats()
+    load_escrow_addresses()
+    
     if not BOT_TOKEN:
         print("❌ Error: ESCROW_BOT_TOKEN environment variable not set!")
         print("Please set your Telegram bot token in Secrets.")
@@ -2694,16 +6793,22 @@ def main():
         print("   Get credentials from https://my.telegram.org/apps")
         print("")
     
-    # Build app with optimized settings for faster response
+    # Build app with a custom bot that adds a 1-second delay before every message
+    delayed_bot = DelayedBot(
+        token=BOT_TOKEN,
+        request=HTTPXRequest(connection_pool_size=8, pool_timeout=30.0),
+        get_updates_request=HTTPXRequest(connection_pool_size=8, pool_timeout=30.0),
+    )
     app = (
         ApplicationBuilder()
-        .token(BOT_TOKEN)
+        .bot(delayed_bot)
         .concurrent_updates(True)  # Handle multiple updates concurrently
-        .pool_timeout(30.0)  # Faster timeout for connections
-        .connection_pool_size(8)  # More concurrent connections
         .build()
     )
-    
+
+    # Runs before every other handler: admins get no response delay
+    app.add_handler(TypeHandler(Update, tag_admin_update), group=-1)
+
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("escrow", escrow_command))
@@ -2718,19 +6823,52 @@ def main():
     app.add_handler(CommandHandler("add", add_command))
     app.add_handler(CommandHandler("fakedepo", fakedepo_command))
     app.add_handler(CommandHandler("link", link_command))
+    app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(CommandHandler("blacklist", blacklist_command))
+    app.add_handler(CommandHandler("whitelist", whitelist_command))
     app.add_handler(CommandHandler("verify", verify_command))
     app.add_handler(CommandHandler("release", release_command))
     app.add_handler(CommandHandler("refund", refund_command))
-    app.add_handler(CommandHandler("leave", leave_command))
+    app.add_handler(CommandHandler("close", close_command))
+    app.add_handler(CommandHandler("id", id_command))
+    app.add_handler(CommandHandler("globalfee", globalfee_command))
+    app.add_handler(CommandHandler("save", save_command))
+    app.add_handler(CommandHandler("mystats", mystats_command))
+    app.add_handler(CommandHandler("empty", empty_command))
+    app.add_handler(CommandHandler("setaddy", setaddy_command))
+    app.add_handler(CommandHandler("changeaddy", changeaddy_command))
+    app.add_handler(CommandHandler("manual", manual_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("clonestats", clonestats_command))
     app.add_handler(CallbackQueryHandler(button_callback))
     app.add_handler(ChatMemberHandler(track_chat_members, ChatMemberHandler.CHAT_MEMBER))
+    app.add_handler(ChatJoinRequestHandler(handle_join_request))
+    # Auto-delete "X added Y" / join / leave service messages in escrow groups
+    app.add_handler(MessageHandler(
+        filters.StatusUpdate.NEW_CHAT_MEMBERS | filters.StatusUpdate.LEFT_CHAT_MEMBER,
+        delete_service_messages
+    ))
+    # Message handler to capture deal details (Quantity/Amount) after /dd command
+    # Handles both text messages and captions on photos/documents
+    app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS, handle_deal_details_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_deal_details_message))
     
-    # Start deposit monitoring in background
+    # Start deposit monitoring in background using PTB's task management
     async def post_init(application):
-        asyncio.create_task(monitor_deposits(application))
+        # Use application.create_task so PTB tracks and cancels it on shutdown
+        application.create_task(monitor_deposits(application))
+    
+    # Properly stop Pyrogram client on shutdown
+    async def post_shutdown(application):
+        if user_client and user_client.is_connected:
+            try:
+                await user_client.stop()
+                print("✅ Pyrogram client stopped cleanly")
+            except Exception as e:
+                print(f"⚠️  Error stopping Pyrogram client: {e}")
     
     app.post_init = post_init
+    app.post_shutdown = post_shutdown
     
     print("✅ @PagaLEscrowBot is running...")
     print(f"✅ Registered admin IDs: {ADMIN_IDS}")
@@ -2744,17 +6882,13 @@ def main():
     else:
         print("⚠️  Logs channel not configured (LOGS_CHANNEL_ID not set)")
     
-    try:
-        # Run polling with faster updates
-        app.run_polling(
-            poll_interval=0.5,  # Check for updates every 0.5 seconds
-            timeout=10,  # Faster timeout
-            drop_pending_updates=False
-        )
-    finally:
-        # Stop user client if it's running
-        if user_client and user_client.is_connected:
-            asyncio.run(user_client.stop())
+    # Run polling with faster updates
+    app.run_polling(
+        poll_interval=0.5,  # Check for updates every 0.5 seconds
+        timeout=10,  # Faster timeout
+        drop_pending_updates=False,
+        allowed_updates=["message", "callback_query", "chat_member", "my_chat_member", "chat_join_request"]
+    )
 
 if __name__ == "__main__":
     main()
