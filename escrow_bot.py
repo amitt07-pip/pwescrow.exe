@@ -447,7 +447,10 @@ def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username=
     if len(role_order) >= 2:
         lines.append(f"<b>Status:</b> {current_status}")
 
-    lines.extend(["", "Deal Information will be updated as soon as its fulfilled"])
+    lines.extend([
+        "",
+        "<blockquote><i>Deal Information will be updated as soon as its fulfilled</i></blockquote>"
+    ])
     return "\n".join(lines)
 
 
