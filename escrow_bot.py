@@ -428,11 +428,12 @@ ROLE_LOG_LABELS = {'buyer': 'Buyer', 'seller': 'Seller'}
 
 def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username="Not set", 
                               deal_amount="Not set", group_type="P2P", current_status="Group Created",
-                              initiator_username="Not set", role_order=None):
+                              initiator_username="Not set", role_order=None, deposit_amount=None):
     """Build the escrow log message with current data.
 
     Role lines are only shown once that role is set, in the order the roles were
-    set. The status line only shows once both roles are set.
+    set. The status line only shows once both roles are set, and the deposited
+    amount only once a deposit has been detected.
     """
     usernames = {'buyer': buyer_username, 'seller': seller_username}
     if not role_order:
@@ -441,10 +442,20 @@ def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username=
             if usernames.get(role) and usernames[role] != 'Not set'
         ]
 
-    lines = ["<b><u>PAGAL ESCROW BOT</u></b>", ""]
+    lines = [
+        "<b><u>PAGAL ESCROW BOT</u></b>",
+        "",
+        f"🆔 <b>Chat ID:</b> <code>{chat_id}</code>",
+    ]
     for role in role_order:
         lines.append(f"👤 <b>{ROLE_LOG_LABELS[role]}:</b> {usernames.get(role, 'Not set')}")
     lines.append(f"🔖 <b>Group TYPE:</b> {group_type}")
+
+    if deposit_amount is not None:
+        lines.append(
+            f"💰 <b>Deposited Amount:</b> <code>{deposit_amount:.5f}</code> "
+            f"<b><u>[{deposit_amount:.2f}$]</u></b>"
+        )
 
     if len(role_order) >= 2:
         lines.append(f"<b>Status:</b> {current_status}")
@@ -465,20 +476,28 @@ def build_escrow_log_markup(chat_id):
         InlineKeyboardButton("DEAL INFO", callback_data=f"dealinfo_{chat_id}")
     ]])
 
-async def get_deal_group_link(context, chat_id):
-    """Return the deal group's invite link, creating one with the bot if needed."""
-    stored_link = escrow_roles.get(chat_id, {}).get('invite_link')
-    if stored_link:
-        return stored_link
+async def create_unlimited_invite_link(context, chat_id):
+    """Create a fresh invite link with no member limit and no expiry.
+
+    The link handed to the buyer/seller is capped at 2 uses and expires, so logs
+    that need a working link must generate their own.
+    """
+    global user_client
 
     try:
-        link = await context.bot.export_chat_invite_link(chat_id)
-        if chat_id not in escrow_roles:
-            escrow_roles[chat_id] = {}
-        escrow_roles[chat_id]['invite_link'] = link
-        return link
+        if user_client:
+            if not user_client.is_connected:
+                await user_client.start()
+            link_obj = await user_client.create_chat_invite_link(chat_id)
+            return link_obj.invite_link
     except Exception as e:
-        print(f"⚠️  Could not get invite link for chat {chat_id}: {e}")
+        print(f"⚠️  Userbot could not create invite link for chat {chat_id}: {e}")
+
+    try:
+        link_obj = await context.bot.create_chat_invite_link(chat_id)
+        return link_obj.invite_link
+    except Exception as e:
+        print(f"⚠️  Could not create invite link for chat {chat_id}: {e}")
         return None
 
 
@@ -491,7 +510,7 @@ async def send_deal_result_log(context, chat_id, buyer_username, seller_username
     try:
         chat_info = await context.bot.get_chat(chat_id)
         group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-        group_link = await get_deal_group_link(context, chat_id)
+        group_link = await create_unlimited_invite_link(context, chat_id)
         group_value = f'<a href="{group_link}">Link</a>' if group_link else "Link"
         title = "DEAL SUCCESSFULLY REFUNDED" if refunded else "DEAL SUCCESSFULLY COMPLETED"
 
@@ -529,7 +548,8 @@ async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=Non
                 'status_stage': 0,
                 'initiator_username': initiator_username or 'Not set',
                 'role_order': [],
-                'deal_details': None
+                'deal_details': None,
+                'deposit_amount': None
             }
             for role, value in (('buyer', buyer_username), ('seller', seller_username)):
                 if value:
@@ -553,7 +573,8 @@ async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=Non
             group_type=group_type,
             current_status="Group Created",
             initiator_username=log_data.get('initiator_username', 'Not set'),
-            role_order=log_data.get('role_order')
+            role_order=log_data.get('role_order'),
+            deposit_amount=log_data.get('deposit_amount')
         )
         
         print(f"📤 Sending escrow log to channel {LOGS_CHANNEL_ID}...")
@@ -574,7 +595,8 @@ async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=Non
         return None
 
 async def update_escrow_log(context, chat_id, new_status=None, buyer_username=None, 
-                            seller_username=None, deal_amount=None, extra_info=""):
+                            seller_username=None, deal_amount=None, extra_info="",
+                            deposit_amount=None):
     """Update the escrow log message with new status/data"""
     if not LOGS_CHANNEL_ID:
         return
@@ -602,6 +624,8 @@ async def update_escrow_log(context, chat_id, new_status=None, buyer_username=No
             role_order.append('seller')
     if deal_amount is not None:
         log_data['deal_amount'] = deal_amount
+    if deposit_amount is not None:
+        log_data['deposit_amount'] = deposit_amount
     
     # Update status if provided and it's a progression (not regression)
     if new_status is not None:
@@ -631,7 +655,8 @@ async def update_escrow_log(context, chat_id, new_status=None, buyer_username=No
         group_type=log_data.get('group_type', 'P2P'),
         current_status=log_data.get('current_status', 'Group Created'),
         initiator_username=log_data.get('initiator_username', 'Not set'),
-        role_order=log_data.get('role_order')
+        role_order=log_data.get('role_order'),
+        deposit_amount=log_data.get('deposit_amount')
     )
     
     try:
@@ -1273,7 +1298,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Create invite link with 2 member limit
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
-            escrow_roles[bot_chat_id]['invite_link'] = invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
 
             # Allow regular members to add other members directly
@@ -1429,7 +1453,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Create invite link with 2 member limit
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
-            escrow_roles[bot_chat_id]['invite_link'] = invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
 
             # Allow regular members to add other members directly
@@ -1579,7 +1602,6 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 creates_join_request=True
             )
             invite_link = invite_link_obj.invite_link
-            escrow_roles[bot_chat_id]['invite_link'] = invite_link
 
             # Allow regular members to add other members directly
             await enable_member_invites(user_client, supergroup.id)
@@ -3907,7 +3929,8 @@ async def addbalance_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Update escrow log with new balance as deal_amount
     await update_escrow_log(context, chat_id, 
         new_status="Deposit Detected",
-        deal_amount=f"{new_balance:.5f} USDT")
+        deal_amount=f"{new_balance:.5f} USDT",
+        deposit_amount=new_balance)
     
     # Send confirmation with the format requested: Amount Received: 500.00 [500.00$]
     await update.message.reply_text(
@@ -4121,7 +4144,8 @@ Useful commands:</b>
                     await update_escrow_log(mock_context, chat_id, 
                         new_status="Deposit Detected", 
                         deal_amount=f"{deal_balance:.5f} USDT",
-                        extra_info=f"{new_amount:.2f}")
+                        extra_info=f"{new_amount:.2f}",
+                        deposit_amount=deal_balance)
                 except Exception as e:
                     print(f"Failed to send deposit notification: {e}")
         
@@ -4242,7 +4266,8 @@ Useful commands:</b>
         # Update escrow log with new balance as deal_amount
         await update_escrow_log(context, chat_id, 
             new_status="Deposit Detected",
-            deal_amount=f"{new_balance:.5f} USDT")
+            deal_amount=f"{new_balance:.5f} USDT",
+            deposit_amount=new_balance)
         
         await update.message.reply_text(
             f"<b>✅ Deposit confirmation sent to chat {chat_id}</b>\n"
