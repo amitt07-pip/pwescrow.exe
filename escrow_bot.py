@@ -439,7 +439,7 @@ def build_escrow_log_message(chat_id, buyer_username="Not set", seller_username=
             if usernames.get(role) and usernames[role] != 'Not set'
         ]
 
-    lines = ["<b>PAGAL ESCROW BOT</b>", ""]
+    lines = ["<b><u>PAGAL ESCROW BOT</u></b>", ""]
     for role in role_order:
         lines.append(f"👤 <b>{ROLE_LOG_LABELS[role]}:</b> {usernames.get(role, 'Not set')}")
     lines.append(f"🔖 <b>Group TYPE:</b> {group_type}")
