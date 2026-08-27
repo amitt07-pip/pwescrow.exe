@@ -417,6 +417,8 @@ ESCROW_STATUS_STAGES = {
     "Deposit Address Sent": 5,
     "Deposit Detected": 6,
     "Release/Refund Stage": 7,
+    "Release Stage": 7,
+    "Refund Stage": 7,
     "Deal Completed": 8,
     "Deal Closed": 9
 }
@@ -5268,8 +5270,8 @@ async def release_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'original_message': confirmation_message
     }
     
-    # Update escrow log status to "Release/Refund Stage"
-    await update_escrow_log(context, chat.id, new_status="Release/Refund Stage")
+    # Update escrow log status to "Release Stage"
+    await update_escrow_log(context, chat.id, new_status="Release Stage")
 
 async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /refund command - only buyer in P2P or seller in OTC can refund funds"""
@@ -5479,8 +5481,8 @@ async def refund_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'original_message': refund_message
     }
     
-    # Update escrow log status to "Release/Refund Stage"
-    await update_escrow_log(context, chat.id, new_status="Release/Refund Stage")
+    # Update escrow log status to "Refund Stage"
+    await update_escrow_log(context, chat.id, new_status="Refund Stage")
 
 async def verify_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /verify command to check if an address belongs to the bot"""
