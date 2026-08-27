@@ -465,6 +465,48 @@ def build_escrow_log_markup(chat_id):
         InlineKeyboardButton("DEAL INFO", callback_data=f"dealinfo_{chat_id}")
     ]])
 
+async def get_deal_group_link(context, chat_id):
+    """Return the deal group's invite link, creating one with the bot if needed."""
+    stored_link = escrow_roles.get(chat_id, {}).get('invite_link')
+    if stored_link:
+        return stored_link
+
+    try:
+        link = await context.bot.export_chat_invite_link(chat_id)
+        if chat_id not in escrow_roles:
+            escrow_roles[chat_id] = {}
+        escrow_roles[chat_id]['invite_link'] = link
+        return link
+    except Exception as e:
+        print(f"⚠️  Could not get invite link for chat {chat_id}: {e}")
+        return None
+
+
+async def send_deal_result_log(context, chat_id, buyer_username, seller_username,
+                               amount_after_fees, refunded=False):
+    """Send the completed/refunded deal message to the logs channel."""
+    if not LOGS_CHANNEL_ID:
+        return
+
+    try:
+        chat_info = await context.bot.get_chat(chat_id)
+        group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
+        group_link = await get_deal_group_link(context, chat_id)
+        group_value = f'<a href="{group_link}">Link</a>' if group_link else "Link"
+        title = "DEAL SUCCESSFULLY REFUNDED" if refunded else "DEAL SUCCESSFULLY COMPLETED"
+
+        logs_msg = f"""✅ <b>{title}</b> ✅
+
+👤 <b>Buyer:</b> {buyer_username}
+👤 <b>Seller:</b> {seller_username}
+📋 <b>Group Type:</b> {group_type}
+💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
+🔗 <b>Group:</b> {group_value}"""
+        await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
+    except Exception as e:
+        print(f"Error sending logs message: {e}")
+
+
 async def send_escrow_log(context, chat_id, group_type="P2P", buyer_username=None, seller_username=None, deal_amount=None, initiator_username=None):
     """Send initial escrow log to logs channel and store message ID"""
     if not LOGS_CHANNEL_ID:
@@ -1231,6 +1273,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Create invite link with 2 member limit
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
+            escrow_roles[bot_chat_id]['invite_link'] = invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
 
             # Allow regular members to add other members directly
@@ -1386,6 +1429,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             # Create invite link with 2 member limit
             invite_link_obj = await user_client.create_chat_invite_link(supergroup.id, member_limit=2)
             invite_link = invite_link_obj.invite_link
+            escrow_roles[bot_chat_id]['invite_link'] = invite_link
             print(f"✅ Invite link created by anonymous userbot with 2 member limit: {invite_link}")
 
             # Allow regular members to add other members directly
@@ -1535,6 +1579,7 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
                 creates_join_request=True
             )
             invite_link = invite_link_obj.invite_link
+            escrow_roles[bot_chat_id]['invite_link'] = invite_link
 
             # Allow regular members to add other members directly
             await enable_member_invites(user_client, supergroup.id)
@@ -2177,21 +2222,14 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     await context.bot.send_message(chat_id=release_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
                     
-                    if LOGS_CHANNEL_ID:
-                        try:
-                            chat_info = await context.bot.get_chat(release_data['chat_id'])
-                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
-                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
-
-👤 <b>Buyer:</b> {release_data['buyer_username']}
-👤 <b>Seller:</b> {release_data['seller_username']}
-📋 <b>Group Type:</b> {group_type}
-💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
-                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
-                        except Exception as e:
-                            print(f"Error sending logs message: {e}")
+                    await send_deal_result_log(
+                        context,
+                        release_data['chat_id'],
+                        release_data['buyer_username'],
+                        release_data['seller_username'],
+                        amount_after_fees,
+                        refunded=False
+                    )
                     
                     try:
                         release_amt = float(amount) if amount.lower() != 'all' else escrow_balance
@@ -2303,21 +2341,14 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     await context.bot.send_message(chat_id=release_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
                     
-                    if LOGS_CHANNEL_ID:
-                        try:
-                            chat_info = await context.bot.get_chat(release_data['chat_id'])
-                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
-                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
-
-👤 <b>Buyer:</b> {release_data['buyer_username']}
-👤 <b>Seller:</b> {release_data['seller_username']}
-📋 <b>Group Type:</b> {group_type}
-💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
-                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
-                        except Exception as e:
-                            print(f"Error sending logs message: {e}")
+                    await send_deal_result_log(
+                        context,
+                        release_data['chat_id'],
+                        release_data['buyer_username'],
+                        release_data['seller_username'],
+                        amount_after_fees,
+                        refunded=False
+                    )
                     
                     escrow_roles[release_data['chat_id']]['balance'] -= escrow_balance
                     
@@ -2452,21 +2483,14 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     await context.bot.send_message(chat_id=refund_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
                     
-                    if LOGS_CHANNEL_ID:
-                        try:
-                            chat_info = await context.bot.get_chat(refund_data['chat_id'])
-                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
-                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
-
-👤 <b>Buyer:</b> {refund_data['buyer_username']}
-👤 <b>Seller:</b> {refund_data['seller_username']}
-📋 <b>Group Type:</b> {group_type}
-💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
-                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
-                        except Exception as e:
-                            print(f"Error sending logs message: {e}")
+                    await send_deal_result_log(
+                        context,
+                        refund_data['chat_id'],
+                        refund_data['buyer_username'],
+                        refund_data['seller_username'],
+                        amount_after_fees,
+                        refunded=True
+                    )
                     
                     escrow_roles[refund_data['chat_id']]['deal_complete'] = True
                     # Update escrow log status to "Deal Completed"
@@ -2567,21 +2591,14 @@ Thank you for using @PagaLEscrowBot 🙌
                     
                     await context.bot.send_message(chat_id=refund_data['chat_id'], text=completion_msg, parse_mode='HTML', reply_markup=link_markup)
                     
-                    if LOGS_CHANNEL_ID:
-                        try:
-                            chat_info = await context.bot.get_chat(refund_data['chat_id'])
-                            group_type = "OTC" if "OTC" in chat_info.title else ("Product Deal" if "Product" in chat_info.title else "P2P")
-                            group_link = f"https://t.me/c/{str(chat_info.id)[4:]}/{query.message.message_id}"
-                            logs_msg = f"""✅ <b>DEAL SUCCESSFULLY COMPLETED</b> ✅
-
-👤 <b>Buyer:</b> {refund_data['buyer_username']}
-👤 <b>Seller:</b> {refund_data['seller_username']}
-📋 <b>Group Type:</b> {group_type}
-💰 <b>Amount:</b> [{amount_after_fees:.2f}$]
-🔗 <b>Group:</b> <a href="{group_link}">{chat_info.title}</a>"""
-                            await context.bot.send_message(chat_id=LOGS_CHANNEL_ID, text=logs_msg, parse_mode='HTML')
-                        except Exception as e:
-                            print(f"Error sending logs message: {e}")
+                    await send_deal_result_log(
+                        context,
+                        refund_data['chat_id'],
+                        refund_data['buyer_username'],
+                        refund_data['seller_username'],
+                        amount_after_fees,
+                        refunded=True
+                    )
                     
                     try:
                         refund_amt = float(amount) if amount.lower() != 'all' else escrow_balance
