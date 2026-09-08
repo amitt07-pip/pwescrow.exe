@@ -859,14 +859,21 @@ async def escrow_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         
         keyboard = [
-            [InlineKeyboardButton("P2P", callback_data="escrow_direct_p2p"),
-             InlineKeyboardButton("Product Deal", callback_data="escrow_direct_product")]
+            [InlineKeyboardButton("P2P", callback_data=f"escrow_direct_p2p_{initiator.id}"),
+             InlineKeyboardButton("Product Deal", callback_data=f"escrow_direct_product_{initiator.id}")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
             "Please select your escrow type from below.",
             reply_markup=reply_markup
+        )
+        return
+    
+    if update.effective_chat.type in ['group', 'supergroup']:
+        await update.message.reply_text(
+            "<b>Please use the proper format.\n\nEx: <code>/escrow</code> [userId/userName]</b>",
+            parse_mode='HTML'
         )
         return
     
@@ -1508,20 +1515,25 @@ Start sharing and enjoy CRAZY fee discounts! 🎉"""
             error_message = f"❌ Failed to create escrow group.\n\nPlease try again or contact support.\n\nError: {str(e)}"
             await query.edit_message_text(error_message)
     
-    elif query.data in ("escrow_direct_p2p", "escrow_direct_product"):
+    elif query.data.startswith(("escrow_direct_p2p", "escrow_direct_product")):
         # Handle direct escrow group creation with counterparty
         if await check_blacklist(update, context):
             return
         
+        user = query.from_user
+        owner_id = query.data.rsplit("_", 1)[-1]
+        if owner_id.isdigit() and int(owner_id) != user.id:
+            await query.answer("Only the user who sent /escrow can use these buttons.", show_alert=True)
+            return
+        
         await query.answer()
         
-        user = query.from_user
         pending = direct_escrow_selection.get(user.id)
         if not pending:
             await query.edit_message_text("<b>Session expired. Please use /escrow @username again.</b>", parse_mode='HTML')
             return
         
-        is_p2p = query.data == "escrow_direct_p2p"
+        is_p2p = query.data.startswith("escrow_direct_p2p")
         escrow_type = "P2P" if is_p2p else "OTC"
         group_name = f"{escrow_type} Escrow By PAGAL Bot"
         
